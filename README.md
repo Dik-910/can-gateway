@@ -60,6 +60,31 @@ tester2  0x7E1 ──┘                    └── 节点2  请求 0x7E2 / �
 **约束**：`target_rsp_id` 在表内必须唯一。响应帧里只有 CAN ID 能定位来源，
 两个节点回同一个 ID 就无法分辨——这是协议决定的，配置时直接拒绝。
 
+## 端到端验证
+
+与 [can-node](https://github.com/Dik-910/can-node) 串联实测（vcan0 ↔ vcan1）：
+
+| 场景 | 结果 |
+|---|---|
+| 周期报文转发 | can-node 发 `0x180`/`0x181` → 网关 → vcan1 收到 **50 / 251 帧**（5 秒，对应 100ms 与 20ms 周期），帧内容逐字节一致 |
+| 诊断链路 | udsoncan 从 vcan0 发请求 → 网关 → can-node（监听 vcan1）→ 响应原路返回，**14 项断言全部通过** |
+
+诊断链路的响应包含 17 字节 VIN（需要 ISO-TP 多帧），**经网关双向逐帧转发后仍能被
+正确重组**——说明转发不会打乱连续帧的序号序列，也不会在转发过程中丢帧。
+
+复现方式：
+
+```bash
+# 终端 1：节点监听 vcan1
+./can-node/ecu-server --if vcan1 --seconds 40
+
+# 终端 2：网关
+./can-gateway/gateway
+
+# 终端 3：tester 从 vcan0 发请求
+python3 can-node/tools/udsoncan_interop.py
+```
+
 ## 构建
 
 ```bash
