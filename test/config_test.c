@@ -57,6 +57,7 @@ static void test_valid(void)
         "[routes]\n"
         "a,0x100,0x1FF,b,0,status\n"
         "b,0x300,0x3FF,a,0x10,cmd\n"
+        "a,0x180,0,b,0,only 0x18x,0x7F0\n"
         "\n"
         "[diag]\n"
         "a,0x7E0,0x7E8,b,0x7E0,0x7E8\n");
@@ -65,8 +66,9 @@ static void test_valid(void)
     check(cfg.channel_count == 2, "two channels");
     check(strcmp(cfg.channels[0].name, "a") == 0, "channel 0 name");
     check(strcmp(cfg.channels[0].ifname, "vcan0") == 0, "channel 0 ifname");
-    check(cfg.route_count == 2, "two routes");
+    check(cfg.route_count == 3, "three routes");
     check(cfg.diag_count == 1, "one diag map");
+    check(cfg.routes[2].id_mask == 0x7F0, "id mask parsed from 7th field");
 
     check(cfg.routes[0].id_min == 0x100 && cfg.routes[0].id_max == 0x1FF,
           "hex id parsed");

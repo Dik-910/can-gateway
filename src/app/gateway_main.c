@@ -104,6 +104,7 @@ int main(int argc, char **argv)
         rr.dst_channel = (uint8_t)resolve_channel(&cfg, ch_idx, cr->dst);
         rr.id_min = cr->id_min;
         rr.id_max = cr->id_max;
+        rr.id_mask = cr->id_mask;
         rr.id_offset = cr->offset;
         rr.enabled = 1;
         snprintf(rr.note, sizeof(rr.note), "%s", cr->note);

@@ -54,6 +54,59 @@ static int add_rule(route_table_t *t, uint8_t src, uint32_t lo, uint32_t hi,
     return route_table_add(t, &r);
 }
 
+/* 带掩码的规则：id_min 作为比较值，id_max 忽略 */
+static int add_mask_rule(route_table_t *t, uint8_t src, uint32_t value,
+                         uint8_t dst, uint32_t mask, const char *note)
+{
+    route_rule_t r = mk_rule(src, value, 0, dst, 0, note);
+    r.id_mask = mask;
+    return route_table_add(t, &r);
+}
+
+static void test_mask_matching(void)
+{
+    route_table_t t;
+
+    printf("\nMask matching\n");
+    route_table_init(&t);
+
+    /* mask=0x7F0, value=0x180：匹配高 7 位相同的 ID，即 0x180-0x18F */
+    check(add_mask_rule(&t, 0, 0x180, 1, 0x7F0, "nibble") == 0, "mask rule added");
+
+    check(route_table_match(&t, 0, 0x180) != 0, "0x180 matches");
+    check(route_table_match(&t, 0, 0x18F) != 0, "0x18F matches (low nibble ignored)");
+    check(route_table_match(&t, 0, 0x190) == 0, "0x190 does not match");
+    check(route_table_match(&t, 0, 0x080) == 0, "0x080 does not match");
+
+    /* mask=0x700 等价于整段：0x100-0x1FF */
+    route_table_init(&t);
+    check(add_mask_rule(&t, 0, 0x100, 1, 0x700, "page") == 0, "page mask added");
+    check(route_table_match(&t, 0, 0x100) != 0, "0x100 matches page");
+    check(route_table_match(&t, 0, 0x1FF) != 0, "0x1FF matches page");
+    check(route_table_match(&t, 0, 0x200) == 0, "0x200 outside page");
+
+    /* 掩码规则与范围规则混用：先命中者生效 */
+    route_table_init(&t);
+    add_mask_rule(&t, 0, 0x180, 1, 0x7F0, "specific mask");
+    add_rule(&t, 0, 0x100, 0x1FF, 1, 0, "broad range");
+
+    {
+        const route_rule_t *r = route_table_match(&t, 0, 0x182);
+        check(r != 0 && strcmp(r->note, "specific mask") == 0,
+              "mask rule wins when listed first");
+    }
+    {
+        const route_rule_t *r = route_table_match(&t, 0, 0x120);
+        check(r != 0 && strcmp(r->note, "broad range") == 0,
+              "falls through to range rule");
+    }
+
+    /* 掩码越界校验 */
+    route_table_init(&t);
+    check(add_mask_rule(&t, 0, 0x800, 1, 0x7F0, "bad value") == -1,
+          "mask rule with value above 0x7FF rejected");
+}
+
 static void test_add_and_match(void)
 {
     route_table_t t;
@@ -203,6 +256,7 @@ int main(void)
     test_disabled();
     test_id_offset();
     test_validation();
+    test_mask_matching();
 
     printf("\nResult: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;

@@ -16,9 +16,10 @@
  *   b = vcan1
  *
  *   [routes]
- *   # src,id_min,id_max,dst,offset,note
+ *   # src,id_min,id_max,dst,offset,note[,mask]
  *   a,0x100,0x1FF,b,0,status A->B
  *   b,0x300,0x3FF,a,0,cmd B->A
+ *   a,0x180,0,b,0,only xx0 ids,0x7F0
  *
  *   [diag]
  *   # tester_ch,tester_req,tester_rsp,target_ch,target_req,target_rsp
@@ -41,6 +42,7 @@ typedef struct
     char dst[CFG_NAME_MAX];
     uint32_t id_min;
     uint32_t id_max;
+    uint32_t id_mask; /* 0 表示用范围匹配，非 0 表示按掩码匹配 */
     int32_t offset;
     char note[CFG_NOTE_MAX];
 } cfg_route_t;

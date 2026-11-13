@@ -78,7 +78,7 @@ int config_find_channel(const gw_config_t *cfg, const char *name)
 static int parse_route_line(gw_config_t *cfg, char *line, int lineno)
 {
     cfg_route_t *r;
-    char *fields[6];
+    char *fields[7];
     int n = 0;
     char *p = line;
 
@@ -88,9 +88,9 @@ static int parse_route_line(gw_config_t *cfg, char *line, int lineno)
         return -1;
     }
 
-    /* 按逗号切，最多 6 段 */
+    /* 按逗号切，最多 7 段（最后一段是可选掩码） */
     fields[n++] = p;
-    while (n < 6 && (p = strchr(p, ',')) != 0)
+    while (n < 7 && (p = strchr(p, ',')) != 0)
     {
         *p = '\0';
         p++;
@@ -124,6 +124,12 @@ static int parse_route_line(gw_config_t *cfg, char *line, int lineno)
 
     if (n >= 6)
         snprintf(r->note, sizeof(r->note), "%s", trim(fields[5]));
+
+    if (n >= 7 && parse_u32(trim(fields[6]), &r->id_mask) != 0)
+    {
+        log_error("config line %d: invalid id mask", lineno);
+        return -1;
+    }
 
     cfg->route_count++;
     return 0;
@@ -330,8 +336,12 @@ void config_dump(const gw_config_t *cfg)
     for (int i = 0; i < cfg->route_count; i++)
     {
         const cfg_route_t *r = &cfg->routes[i];
-        log_info("  route %s 0x%03X-0x%03X -> %s (offset %d) %s",
-                 r->src, r->id_min, r->id_max, r->dst, r->offset, r->note);
+        if (r->id_mask != 0)
+            log_info("  route %s (id & 0x%03X) == 0x%03X -> %s (offset %d) %s",
+                     r->src, r->id_mask, r->id_min & r->id_mask, r->dst, r->offset, r->note);
+        else
+            log_info("  route %s 0x%03X-0x%03X -> %s (offset %d) %s",
+                     r->src, r->id_min, r->id_max, r->dst, r->offset, r->note);
     }
 
     for (int i = 0; i < cfg->diag_count; i++)

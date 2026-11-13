@@ -24,7 +24,15 @@ int route_table_add(route_table_t *t, const route_rule_t *rule)
         return -1;
     }
 
-    if (rule->id_min > rule->id_max || rule->id_max > GW_STD_ID_MAX)
+    if (rule->id_mask != 0)
+    {
+        if (rule->id_min > GW_STD_ID_MAX || rule->id_mask > GW_STD_ID_MAX)
+        {
+            log_error("invalid mask rule value=0x%03X mask=0x%03X", rule->id_min, rule->id_mask);
+            return -1;
+        }
+    }
+    else if (rule->id_min > rule->id_max || rule->id_max > GW_STD_ID_MAX)
     {
         log_error("invalid id range 0x%03X-0x%03X", rule->id_min, rule->id_max);
         return -1;
@@ -68,8 +76,15 @@ const route_rule_t *route_table_match(route_table_t *t, uint8_t src_channel, uin
         if (r->src_channel != GW_CHANNEL_ANY && r->src_channel != src_channel)
             continue;
 
-        if (id < r->id_min || id > r->id_max)
+        if (r->id_mask != 0)
+        {
+            if ((id & r->id_mask) != (r->id_min & r->id_mask))
+                continue;
+        }
+        else if (id < r->id_min || id > r->id_max)
+        {
             continue;
+        }
 
         t->matched++;
         return r;

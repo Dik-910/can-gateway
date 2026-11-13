@@ -6,7 +6,7 @@
 /*
  * 静态路由表。
  *
- * 一条规则回答：从哪条通道来的、ID 落在什么范围的帧，应该发到哪条通道、ID 要不要改写。
+ * 一条规则回答：从哪条通道来的、ID 满足什么条件的帧，应该发到哪条通道、ID 要不要改写。
  *
  * 为什么用「范围 + 偏移」而不是逐条 ID 列举：
  *   网关常按功能域整体转发（例如 0x180-0x1FF 全部转发），
@@ -22,8 +22,17 @@
 typedef struct
 {
     uint8_t src_channel;  /* 来源通道索引，GW_CHANNEL_ANY 表示不限 */
-    uint32_t id_min;      /* ID 匹配范围（含） */
-    uint32_t id_max;      /* ID 匹配范围（含） */
+    uint32_t id_min;      /* 范围下界；启用掩码时作为比较值 */
+    uint32_t id_max;      /* 范围上界；启用掩码时忽略 */
+
+    /*
+     * id_mask 为 0 时按 [id_min, id_max] 范围匹配；
+     * 非 0 时按 (id & mask) == (id_min & mask) 匹配。
+     *
+     * 掩码能表达范围表达不了的东西，例如「只转发 ID 低 4 位为 0 的帧」
+     * （mask=0x7F0, value=0x180 会同时匹配 0x180/0x190/.../0x1F0）。
+     */
+    uint32_t id_mask;
 
     uint8_t dst_channel;  /* 目标通道索引 */
     int32_t id_offset;    /* 目标 ID = 源 ID + offset，0 表示不改写 */
