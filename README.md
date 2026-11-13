@@ -1,5 +1,7 @@
 # can-gateway
 
+[![ci](https://github.com/Dik-910/can-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/Dik-910/can-gateway/actions/workflows/ci.yml)
+
 车载 CAN 网关：在多路 CAN 之间路由报文，并中转诊断请求。
 
 ```
