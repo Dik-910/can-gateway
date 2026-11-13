@@ -6,3 +6,5 @@
 /test/diag_router_test
 /test/config_test
 /.cfg_test.conf
+/test/rate_limiter_test
+/.limit_test.conf

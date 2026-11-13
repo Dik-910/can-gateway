@@ -186,6 +186,87 @@ static int parse_diag_line(gw_config_t *cfg, char *line, int lineno)
     return 0;
 }
 
+/*
+ * [limits] 段两种写法：
+ *   a = 3000            通道总速率
+ *   id a,0x181,60       单 ID 速率
+ */
+static int parse_limit_line(gw_config_t *cfg, char *line, int lineno)
+{
+    char *p;
+
+    if (strncmp(line, "id ", 3) == 0)
+    {
+        char *fields[3];
+        int n = 0;
+        char *cur = line + 3;
+        cfg_id_limit_t *l;
+
+        if (cfg->id_limit_count >= CFG_MAX_LIMITS)
+        {
+            log_error("config line %d: too many id limits (max %d)", lineno, CFG_MAX_LIMITS);
+            return -1;
+        }
+
+        fields[n++] = cur;
+        while (n < 3 && (cur = strchr(cur, ',')) != 0)
+        {
+            *cur = '\0';
+            cur++;
+            fields[n++] = cur;
+        }
+
+        if (n < 3)
+        {
+            log_error("config line %d: id limit needs 'id ch,id,limit'", lineno);
+            return -1;
+        }
+
+        l = &cfg->id_limits[cfg->id_limit_count];
+        memset(l, 0, sizeof(*l));
+        snprintf(l->ch, sizeof(l->ch), "%s", trim(fields[0]));
+
+        if (parse_u32(trim(fields[1]), &l->id) != 0 ||
+            parse_u32(trim(fields[2]), &l->limit) != 0)
+        {
+            log_error("config line %d: invalid id limit numbers", lineno);
+            return -1;
+        }
+
+        cfg->id_limit_count++;
+        return 0;
+    }
+
+    /* 通道总速率：name = limit */
+    p = strchr(line, '=');
+    if (p == 0)
+    {
+        log_error("config line %d: limit needs 'channel = number' or 'id ...'", lineno);
+        return -1;
+    }
+
+    if (cfg->chan_limit_count >= CFG_MAX_CHANNELS)
+    {
+        log_error("config line %d: too many channel limits", lineno);
+        return -1;
+    }
+
+    *p = '\0';
+    {
+        cfg_chan_limit_t *l = &cfg->chan_limits[cfg->chan_limit_count];
+        snprintf(l->ch, sizeof(l->ch), "%s", trim(line));
+
+        if (parse_u32(trim(p + 1), &l->limit) != 0)
+        {
+            log_error("config line %d: invalid channel limit", lineno);
+            return -1;
+        }
+        cfg->chan_limit_count++;
+    }
+
+    return 0;
+}
+
 int config_load(gw_config_t *cfg, const char *path)
 {
     FILE *fp;
@@ -279,6 +360,14 @@ int config_load(gw_config_t *cfg, const char *path)
                 return -1;
             }
         }
+        else if (strcmp(section, "limits") == 0)
+        {
+            if (parse_limit_line(cfg, s, lineno) != 0)
+            {
+                fclose(fp);
+                return -1;
+            }
+        }
         else
         {
             log_warn("config line %d: key outside any known section, ignored", lineno);
@@ -319,6 +408,24 @@ int config_load(gw_config_t *cfg, const char *path)
         }
     }
 
+    for (int i = 0; i < cfg->chan_limit_count; i++)
+    {
+        if (config_find_channel(cfg, cfg->chan_limits[i].ch) < 0)
+        {
+            log_error("limit references unknown channel %s", cfg->chan_limits[i].ch);
+            return -1;
+        }
+    }
+
+    for (int i = 0; i < cfg->id_limit_count; i++)
+    {
+        if (config_find_channel(cfg, cfg->id_limits[i].ch) < 0)
+        {
+            log_error("id limit references unknown channel %s", cfg->id_limits[i].ch);
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -327,8 +434,9 @@ void config_dump(const gw_config_t *cfg)
     if (cfg == 0)
         return;
 
-    log_info("config: %d channel(s), %d route(s), %d diag map(s)",
-             cfg->channel_count, cfg->route_count, cfg->diag_count);
+    log_info("config: %d channel(s), %d route(s), %d diag map(s), %d limit(s)",
+             cfg->channel_count, cfg->route_count, cfg->diag_count,
+             cfg->chan_limit_count + cfg->id_limit_count);
 
     for (int i = 0; i < cfg->channel_count; i++)
         log_info("  channel %s = %s", cfg->channels[i].name, cfg->channels[i].ifname);
@@ -351,4 +459,12 @@ void config_dump(const gw_config_t *cfg)
                  d->tester_ch, d->tester_req, d->tester_rsp,
                  d->target_ch, d->target_req, d->target_rsp);
     }
+
+    for (int i = 0; i < cfg->chan_limit_count; i++)
+        log_info("  limit channel %s = %u frame/s",
+                 cfg->chan_limits[i].ch, cfg->chan_limits[i].limit);
+
+    for (int i = 0; i < cfg->id_limit_count; i++)
+        log_info("  limit id      %s 0x%03X = %u frame/s",
+                 cfg->id_limits[i].ch, cfg->id_limits[i].id, cfg->id_limits[i].limit);
 }

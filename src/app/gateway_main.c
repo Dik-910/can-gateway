@@ -141,6 +141,32 @@ int main(int argc, char **argv)
         }
     }
 
+    /* 速率限制：通道上限防洪水，单 ID 上限精确保护关键报文 */
+    for (int i = 0; i < cfg.chan_limit_count; i++)
+    {
+        int idx = resolve_channel(&cfg, ch_idx, cfg.chan_limits[i].ch);
+
+        if (idx >= 0)
+        {
+            route_engine_set_channel_limit(&engine, (uint8_t)idx, cfg.chan_limits[i].limit);
+            log_info("rate limit: channel %s <= %u frame/s",
+                     cfg.chan_limits[i].ch, cfg.chan_limits[i].limit);
+        }
+    }
+
+    for (int i = 0; i < cfg.id_limit_count; i++)
+    {
+        int idx = resolve_channel(&cfg, ch_idx, cfg.id_limits[i].ch);
+
+        if (idx >= 0 &&
+            route_engine_set_id_limit(&engine, (uint8_t)idx, cfg.id_limits[i].id,
+                                      cfg.id_limits[i].limit) == 0)
+        {
+            log_info("rate limit: %s 0x%03X <= %u frame/s",
+                     cfg.id_limits[i].ch, cfg.id_limits[i].id, cfg.id_limits[i].limit);
+        }
+    }
+
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 

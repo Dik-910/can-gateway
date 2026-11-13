@@ -5,6 +5,7 @@
 
 #include "can_channel.h"
 #include "diag_router.h"
+#include "rate_limiter.h"
 #include "route_table.h"
 
 /*
@@ -33,6 +34,9 @@ typedef struct
     diag_router_t diag;
     int diag_enabled;
 
+    rate_limiter_t rate;
+    int rate_enabled;
+
     int epoll_fd;
     int running;
 
@@ -41,6 +45,7 @@ typedef struct
     uint64_t diag_forwarded;  /* 其中经诊断映射转发的帧数 */
     uint64_t no_route;        /* 没有规则匹配而丢弃 */
     uint64_t send_failed;     /* 转发时发送失败 */
+    uint64_t rate_limited;    /* 因限速被丢弃 */
     uint64_t rewrite_failed;  /* ID 改写越界（理论上配置阶段已拦） */
 } route_engine_t;
 
@@ -58,6 +63,15 @@ int route_engine_add_route(route_engine_t *e, const route_rule_t *rule);
  * 不再落到静态路由表——两者顺序不能反，否则 tester 侧的 ID 改写不会生效。
  */
 int route_engine_add_diag_map(route_engine_t *e, const diag_map_t *m);
+
+/*
+ * 设置通道总速率上限（帧/秒），0 表示不限。
+ * 诊断帧不受限速影响——刷写时本来就有大量传输帧，限速会导致升级失败。
+ */
+void route_engine_set_channel_limit(route_engine_t *e, uint8_t channel, uint32_t limit);
+
+/* 为单个 ID 设置上限，用于精确保护关键周期报文 */
+int route_engine_set_id_limit(route_engine_t *e, uint8_t channel, uint32_t id, uint32_t limit);
 
 /*
  * 阻塞运行，直到 route_engine_stop 被调用。

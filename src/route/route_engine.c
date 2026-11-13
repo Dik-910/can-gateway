@@ -20,6 +20,7 @@ int route_engine_init(route_engine_t *e)
     memset(e, 0, sizeof(*e));
     route_table_init(&e->routes);
     diag_router_init(&e->diag);
+    rate_limiter_init(&e->rate);
 
     fd = epoll_create1(0);
     if (fd < 0)
@@ -119,6 +120,27 @@ int route_engine_add_diag_map(route_engine_t *e, const diag_map_t *m)
     return 0;
 }
 
+void route_engine_set_channel_limit(route_engine_t *e, uint8_t channel, uint32_t limit)
+{
+    if (e == 0 || limit == 0)
+        return;
+
+    rate_limiter_set_channel(&e->rate, channel, limit);
+    e->rate_enabled = 1;
+}
+
+int route_engine_set_id_limit(route_engine_t *e, uint8_t channel, uint32_t id, uint32_t limit)
+{
+    if (e == 0 || limit == 0)
+        return -1;
+
+    if (rate_limiter_set_id(&e->rate, channel, id, limit) != 0)
+        return -1;
+
+    e->rate_enabled = 1;
+    return 0;
+}
+
 void route_engine_stop(route_engine_t *e)
 {
     if (e != 0)
@@ -189,6 +211,13 @@ static void drain_channel(route_engine_t *e, uint8_t idx)
         if (route_target_id(rule, f.id, &target_id) != 0)
         {
             e->rewrite_failed++;
+            continue;
+        }
+
+        /* 限速只作用于普通业务帧；诊断帧走上面的分支，不受影响 */
+        if (e->rate_enabled && !rate_limiter_allow(&e->rate, idx, f.id, now_ms))
+        {
+            e->rate_limited++;
             continue;
         }
 
@@ -269,10 +298,11 @@ void route_engine_print_stats(const route_engine_t *e)
     if (e == 0)
         return;
 
-    log_info("stats: forwarded=%llu (diag %llu) no_route=%llu send_failed=%llu rewrite_failed=%llu",
+    log_info("stats: forwarded=%llu (diag %llu) no_route=%llu rate_limited=%llu send_failed=%llu rewrite_failed=%llu",
              (unsigned long long)e->forwarded,
              (unsigned long long)e->diag_forwarded,
              (unsigned long long)e->no_route,
+             (unsigned long long)e->rate_limited,
              (unsigned long long)e->send_failed,
              (unsigned long long)e->rewrite_failed);
 
