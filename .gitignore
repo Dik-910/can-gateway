@@ -1,0 +1,5 @@
+# 编译产物
+*.o
+/gateway
+/test/frame_queue_test
+/test/route_table_test
