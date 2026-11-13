@@ -42,8 +42,10 @@ IoT 网关追求吞吐，线程池排队无所谓；车载网关要的是**确�
 | `src/route/route_table.c` | 已实现，范围匹配 + ID 改写 + 首命即返回 |
 | `src/route/route_engine.c` | 已实现，epoll 主循环 |
 | `src/diag/diag_router.c` | 已实现，多 tester 会话映射 |
+| `src/route/rate_limiter.c` | 已实现，洪水防护与限速 |
+| `src/util/config.c` | 已实现，INI 配置驱动 |
 
-单元测试 87 项：frame_queue 36 / route_table 24 / diag_router 27。
+单元测试 146 项：frame_queue 36 / route_table 36 / diag_router 27 / config 25 / rate_limiter 22。
 
 ## 诊断路由
 
@@ -61,6 +63,42 @@ tester2  0x7E1 ──┘                    └── 节点2  请求 0x7E2 / �
 
 **约束**：`target_rsp_id` 在表内必须唯一。响应帧里只有 CAN ID 能定位来源，
 两个节点回同一个 ID 就无法分辨——这是协议决定的，配置时直接拒绝。
+
+## 速率限制
+
+网关只转发不限速，会把单个节点的故障扩散成整网故障——某个节点失陷后疯狂发报文，
+占满总线带宽，其他节点的关键报文就发不出去了。
+
+两级限制：
+
+```ini
+[limits]
+a = 3000          # 通道总速率（兜底，防未知 ID 洪水）
+id a,0x181,60     # 单 ID 速率（精确保护关键周期报文）
+```
+
+- 用固定窗口（每秒清零），不是滑动窗口。边界可能有 2 倍突发，但对洪水防护够用，
+  且内存恒定。真要平滑限速得上令牌桶。
+- 被单 ID 限制拒绝的帧不占通道额度，否则无效帧会吃掉通道预算。
+- **诊断帧不受限速影响**：刷写时有大量传输帧，限速会导致升级失败。
+
+实测（0x181 限到 10 帧/秒，实际发送 50 帧/秒）：3 秒 `forwarded=60`、`rate_limited=120`，
+目标总线上 2 秒收到 `0x181` 正好 20 帧。
+
+## 可观测性
+
+统计按 `--stats <秒>` 周期输出：
+
+```
+stats: forwarded=360 (diag 0) no_route=0 rate_limited=0 send_failed=0 rewrite_failed=0
+  channel[0] vcan0  rx=360 tx=0   load=1.5% err=0 (bus 0 ctrl 0)
+  channel[1] vcan1  rx=0   tx=360 load=1.5% err=0 (bus 0 ctrl 0)
+```
+
+- **负载率按位时间累加**计算（`47 + 8*dlc` 加约 1/6 位填充），不是按帧数估。
+  60 帧/秒 × 129 位 ÷ 500000 = 1.5%，与输出一致。
+- **错误帧统计**来自 `CAN_RAW_ERR_FILTER`。不订阅的话总线出问题只能看到「报文变少了」，
+  看不到原因；错误帧区分总线错误与控制器错误（含 Bus Off）。
 
 ## 端到端验证
 

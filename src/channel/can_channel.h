@@ -28,9 +28,26 @@ typedef struct
     uint32_t tx_frames;
     uint32_t rx_errors;
     uint32_t tx_errors;  /* 发送失败，通常是 socket 缓冲满 */
+
+    /* 总线错误帧统计（来自 CAN_RAW_ERR_FILTER） */
+    uint32_t err_frames; /* 错误帧总数 */
+    uint32_t err_bus;    /* 总线错误（位错误、帧格式错等） */
+    uint32_t err_ctrl;   /* 控制器错误（含 Bus Off） */
+
+    /*
+     * 总线负载率。
+     *
+     * 按位时间累加计算，不是按帧数估——不同 DLC 的帧占用差异很大，
+     * 用帧数估会得到完全失真的数字。
+     */
+    uint32_t bitrate;        /* 通道波特率，默认 500000 */
+    uint64_t bits_accum;     /* 当前窗口累计位数 */
+    uint64_t load_window_ms; /* 窗口起点 */
+    uint32_t load_permille;  /* 最近一次算出的负载率（千分比） */
 } can_channel_t;
 
-/* 打开通道。ifname 如 "can0" / "vcan0"。成功返回 0 */
+/* 打开通道。ifname 如 "can0" / "vcan0"，bitrate 用于负载率计算（0 表示用默认 500000） */
+int can_channel_open_ex(can_channel_t *ch, const char *ifname, uint32_t bitrate);
 int can_channel_open(can_channel_t *ch, const char *ifname);
 void can_channel_close(can_channel_t *ch);
 
@@ -45,5 +62,11 @@ int can_channel_recv(can_channel_t *ch, gw_frame_t *f, uint8_t channel_index);
 
 /* 供 epoll 使用 */
 int can_channel_fd(const can_channel_t *ch);
+
+/*
+ * 计算最近 window_ms 内的总线负载率（千分比），并重置窗口。
+ * 由统计打印周期调用即可，不必每帧调用。
+ */
+uint32_t can_channel_update_load(can_channel_t *ch, uint64_t now_ms);
 
 #endif

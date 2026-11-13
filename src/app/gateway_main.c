@@ -80,7 +80,8 @@ int main(int argc, char **argv)
     /* 按配置顺序建通道，记录配置序号到引擎索引的对应关系 */
     for (int i = 0; i < cfg.channel_count; i++)
     {
-        int idx = route_engine_add_channel(&engine, cfg.channels[i].ifname);
+        int idx = route_engine_add_channel_ex(&engine, cfg.channels[i].ifname,
+                                              cfg.channels[i].bitrate);
 
         if (idx < 0)
         {

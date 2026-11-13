@@ -68,6 +68,7 @@ typedef struct
 {
     char name[CFG_NAME_MAX];     /* 配置里的短名，如 "a" */
     char ifname[CFG_IFNAME_MAX]; /* 系统接口名，如 "vcan0" */
+    uint32_t bitrate;            /* 用于负载率计算，缺省 500000 */
 } cfg_channel_t;
 
 /* 通道级速率上限（帧/秒） */

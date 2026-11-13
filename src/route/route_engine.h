@@ -52,7 +52,8 @@ typedef struct
 int route_engine_init(route_engine_t *e);
 void route_engine_close(route_engine_t *e);
 
-/* 打开一路通道并加入 epoll。返回通道索引，失败返回 -1 */
+/* 打开一路通道并加入 epoll。bitrate 用于负载率计算，0 表示默认 500000 */
+int route_engine_add_channel_ex(route_engine_t *e, const char *ifname, uint32_t bitrate);
 int route_engine_add_channel(route_engine_t *e, const char *ifname);
 
 /* 添加路由规则，转发到已注册的通道索引 */
@@ -82,6 +83,6 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms);
 void route_engine_stop(route_engine_t *e);
 
 /* 打印一行统计（由 run 循环周期调用或外部调用） */
-void route_engine_print_stats(const route_engine_t *e);
+void route_engine_print_stats(route_engine_t *e);
 
 #endif

@@ -49,7 +49,7 @@ void route_engine_close(route_engine_t *e)
     e->channel_count = 0;
 }
 
-int route_engine_add_channel(route_engine_t *e, const char *ifname)
+int route_engine_add_channel_ex(route_engine_t *e, const char *ifname, uint32_t bitrate)
 {
     struct epoll_event ev;
     uint8_t idx;
@@ -64,7 +64,7 @@ int route_engine_add_channel(route_engine_t *e, const char *ifname)
 
     idx = e->channel_count;
 
-    if (can_channel_open(&e->channels[idx], ifname) != 0)
+    if (can_channel_open_ex(&e->channels[idx], ifname, bitrate) != 0)
         return -1;
 
     memset(&ev, 0, sizeof(ev));
@@ -85,6 +85,11 @@ int route_engine_add_channel(route_engine_t *e, const char *ifname)
     e->channel_count++;
     log_info("channel[%u] = %s registered", idx, ifname);
     return idx;
+}
+
+int route_engine_add_channel(route_engine_t *e, const char *ifname)
+{
+    return route_engine_add_channel_ex(e, ifname, 0);
 }
 
 int route_engine_add_route(route_engine_t *e, const route_rule_t *rule)
@@ -293,7 +298,7 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
     return 0;
 }
 
-void route_engine_print_stats(const route_engine_t *e)
+void route_engine_print_stats(route_engine_t *e)
 {
     if (e == 0)
         return;
@@ -306,10 +311,18 @@ void route_engine_print_stats(const route_engine_t *e)
              (unsigned long long)e->send_failed,
              (unsigned long long)e->rewrite_failed);
 
-    for (uint8_t i = 0; i < e->channel_count; i++)
     {
-        const can_channel_t *ch = &e->channels[i];
-        log_info("  channel[%u] %-8s rx=%u tx=%u rx_err=%u tx_err=%u",
-                 i, ch->name, ch->rx_frames, ch->tx_frames, ch->rx_errors, ch->tx_errors);
+        uint64_t now = engine_now_ms();
+
+        for (uint8_t i = 0; i < e->channel_count; i++)
+        {
+            can_channel_t *ch = &e->channels[i];
+            uint32_t load = can_channel_update_load(ch, now);
+
+            log_info("  channel[%u] %-8s rx=%u tx=%u load=%u.%u%% err=%u (bus %u ctrl %u)",
+                     i, ch->name, ch->rx_frames, ch->tx_frames,
+                     load / 10u, load % 10u,
+                     ch->err_frames, ch->err_bus, ch->err_ctrl);
+        }
     }
 }

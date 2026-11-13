@@ -333,7 +333,24 @@ int config_load(gw_config_t *cfg, const char *path)
             *eq = '\0';
             ch = &cfg->channels[cfg->channel_count];
             snprintf(ch->name, sizeof(ch->name), "%s", trim(s));
-            snprintf(ch->ifname, sizeof(ch->ifname), "%s", trim(eq + 1));
+
+            /* 支持 "a = vcan0, 500000" 指定波特率（用于负载率计算） */
+            {
+                char *comma = strchr(eq + 1, ',');
+                ch->bitrate = 500000;
+
+                if (comma != 0)
+                {
+                    *comma = '\0';
+                    if (parse_u32(trim(comma + 1), &ch->bitrate) != 0 || ch->bitrate == 0)
+                    {
+                        log_error("config line %d: invalid bitrate", lineno);
+                        fclose(fp);
+                        return -1;
+                    }
+                }
+                snprintf(ch->ifname, sizeof(ch->ifname), "%s", trim(eq + 1));
+            }
 
             if (ch->name[0] == '\0' || ch->ifname[0] == '\0')
             {
