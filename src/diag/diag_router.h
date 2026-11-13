@@ -1,0 +1,85 @@
+#ifndef __DIAG_ROUTER_H
+#define __DIAG_ROUTER_H
+
+#include <stdint.h>
+
+/*
+ * 诊断路由：处理多个 tester 同时诊断多个节点时的 ID 冲突。
+ *
+ * 问题：
+ *   按 ISO 14229，节点的诊断请求 ID 是 0x7E0-0x7E7，响应固定 0x7E8-0x7EF。
+ *   当两个 tester 分别诊断两个节点时，两个节点都会回 0x7E8，
+ *   网关无法判断这个 0x7E8 该交给谁。
+ *
+ * 解法：
+ *   网关维护映射表，把 tester 侧的 ID 与节点侧的 ID 解耦：
+ *
+ *     tester1  0x7E0  ──┐                  ┌── 节点1  0x7E0 / 回 0x7E8
+ *                        ├── 网关映射表 ────┤
+ *     tester2  0x7E1  ──┘                  └── 节点2  0x7E2 / 回 0x7EA
+ *
+ *   请求方向：查 tester 侧 → 改写成节点侧 ID
+ *   响应方向：查节点侧 → 改写成 tester 侧 ID
+ *
+ * 约束（重要）：
+ *   target_rsp_id 必须在表内唯一。因为响应帧里只有 ID 能用来定位来源，
+ *   如果两个节点都回 0x7E8，网关无从区分——这是协议决定的，不是实现缺陷。
+ *   真实项目里要求每个节点的诊断 ID 段错开，或由 tester 侧保证不并发。
+ */
+
+#define GW_DIAG_MAX_MAPS   16
+#define GW_DIAG_TIMEOUT_MS 5000 /* 超过该时间无活动视为会话空闲 */
+
+typedef struct
+{
+    uint8_t in_use;
+
+    /* tester 侧 */
+    uint8_t tester_channel;
+    uint32_t tester_req_id; /* tester 发请求用的 ID，如 0x7E1 */
+    uint32_t tester_rsp_id; /* tester 期望收到的响应 ID，如 0x7E9 */
+
+    /* 节点侧 */
+    uint8_t target_channel;
+    uint32_t target_req_id; /* 转发给节点的请求 ID，如 0x7E0 */
+    uint32_t target_rsp_id; /* 节点回响应用的 ID，如 0x7E8 */
+
+    /* 运行期统计 */
+    uint64_t last_active_ms;
+    uint32_t frames;
+    uint32_t idle_events; /* 被判为空闲的次数 */
+} diag_map_t;
+
+typedef struct
+{
+    diag_map_t maps[GW_DIAG_MAX_MAPS];
+    uint16_t count;
+
+    uint32_t requests;   /* 成功路由的请求数 */
+    uint32_t responses;  /* 成功路由的响应数 */
+    uint32_t unmatched;  /* 落在诊断 ID 段但找不到映射的帧 */
+} diag_router_t;
+
+void diag_router_init(diag_router_t *d);
+
+/* 添加映射。ID 非法、target_rsp_id 重复、表满都会返回 -1 */
+int diag_router_add(diag_router_t *d, const diag_map_t *m);
+
+/*
+ * 请求方向：tester 发的请求 → 节点的请求 ID。
+ * 命中返回 0 并通过 dst_ch / dst_id 输出目标；未命中返回 -1。
+ */
+int diag_router_request(diag_router_t *d, uint64_t now_ms, uint8_t src_ch, uint32_t req_id,
+                        uint8_t *dst_ch, uint32_t *dst_id);
+
+/*
+ * 响应方向：节点回的响应 → tester 的响应 ID。
+ * 命中返回 0；未命中返回 -1。
+ */
+int diag_router_response(diag_router_t *d, uint64_t now_ms, uint8_t src_ch, uint32_t rsp_id,
+                         uint8_t *dst_ch, uint32_t *dst_id);
+
+/* 当前活跃会话数（用于监控），同时把超时的映射标记为空闲 */
+uint16_t diag_router_active(diag_router_t *d, uint64_t now_ms);
+
+#endif

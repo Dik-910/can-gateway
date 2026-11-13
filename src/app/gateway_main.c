@@ -124,6 +124,32 @@ int main(int argc, char **argv)
         route_engine_add_route(&engine, &r);
     }
 
+    /*
+     * 诊断映射示例。
+     *
+     * tester1 在 A 通道用 0x7E0 发请求，诊断 B 通道上的节点（节点侧 0x7E0 / 回 0x7E8）。
+     * 这条映射一旦存在，诊断 ID 段的帧会优先走映射，不再落到上面那两条静态规则。
+     *
+     * 要接第二个 tester 时再加一条：把 tester_req_id 换成 0x7E1、tester_rsp_id 换成 0x7E9，
+     * 节点的 target_rsp_id 换成 0x7EA。注意 target_rsp_id 必须与已有映射不同——
+     * 响应帧里只有 ID 能定位来源，重复就无法分辨（add 时会直接拒绝）。
+     */
+    {
+        diag_map_t m;
+
+        memset(&m, 0, sizeof(m));
+        m.tester_channel = (uint8_t)idx_a;
+        m.tester_req_id = 0x7E0;
+        m.tester_rsp_id = 0x7E8;
+        m.target_channel = (uint8_t)idx_b;
+        m.target_req_id = 0x7E0;
+        m.target_rsp_id = 0x7E8;
+
+        if (route_engine_add_diag_map(&engine, &m) == 0)
+            log_info("diag map: %s 0x7E0 -> %s 0x7E0 (response 0x7E8 back)",
+                     if_a, if_b);
+    }
+
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 

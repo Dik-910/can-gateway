@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "can_channel.h"
+#include "diag_router.h"
 #include "route_table.h"
 
 /*
@@ -29,12 +30,15 @@ typedef struct
     uint8_t channel_count;
 
     route_table_t routes;
+    diag_router_t diag;
+    int diag_enabled;
 
     int epoll_fd;
     int running;
 
     /* 监控指标 */
     uint64_t forwarded;       /* 成功转发的帧数 */
+    uint64_t diag_forwarded;  /* 其中经诊断映射转发的帧数 */
     uint64_t no_route;        /* 没有规则匹配而丢弃 */
     uint64_t send_failed;     /* 转发时发送失败 */
     uint64_t rewrite_failed;  /* ID 改写越界（理论上配置阶段已拦） */
@@ -48,6 +52,12 @@ int route_engine_add_channel(route_engine_t *e, const char *ifname);
 
 /* 添加路由规则，转发到已注册的通道索引 */
 int route_engine_add_route(route_engine_t *e, const route_rule_t *rule);
+
+/*
+ * 添加一条诊断映射。一旦表中有映射，诊断 ID 段的帧会优先走映射，
+ * 不再落到静态路由表——两者顺序不能反，否则 tester 侧的 ID 改写不会生效。
+ */
+int route_engine_add_diag_map(route_engine_t *e, const diag_map_t *m);
 
 /* 阻塞运行，直到 route_engine_stop 被调用 */
 int route_engine_run(route_engine_t *e);

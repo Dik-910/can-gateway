@@ -8,9 +8,9 @@
    节点 B ──┘                  └── CAN 2 ── 节点 D
 ```
 
-## 与 AII_gateway 的关系
+## 与 smartgateway 的关系
 
-本项目的骨架来自 [AII_gateway](https://github.com/Dik-910/AII_gateway)（Linux IoT 网关），
+本项目的骨架来自 [smartgateway](https://github.com/Dik-910/smartgateway)（Linux IoT 网关），
 但两者优化目标不同，所以只复用了一部分：
 
 | 原模块 | 处理 | 原因 |
@@ -38,8 +38,27 @@ IoT 网关追求吞吐，线程池排队无所谓；车载网关要的是**确�
 | `src/util/frame_queue.c` | 已实现，测试覆盖回绕、溢出、单槽 |
 | `src/channel/can_channel.c` | 已实现，SocketCAN 多实例 |
 | `src/route/route_table.c` | 已实现，范围匹配 + ID 改写 + 首命即返回 |
-| `src/route/route_engine.c` | 待实现（epoll 主循环） |
-| `src/diag/` | 待实现（诊断路由与会话映射） |
+| `src/route/route_engine.c` | 已实现，epoll 主循环 |
+| `src/diag/diag_router.c` | 已实现，多 tester 会话映射 |
+
+单元测试 87 项：frame_queue 36 / route_table 24 / diag_router 27。
+
+## 诊断路由
+
+多个 tester 同时诊断多个节点时，节点都按标准回 `0x7E8`，网关无法判断该交给谁。
+解决方式是维护映射表，把两侧 ID 解耦：
+
+```
+tester1  0x7E0 ──┐                    ┌── 节点1  请求 0x7E0 / 响应 0x7E8
+                  ├── 网关映射表 ──────┤
+tester2  0x7E1 ──┘                    └── 节点2  请求 0x7E2 / 响应 0x7EA
+```
+
+- 请求方向：按 `tester_channel + tester_req_id` 查表，改写为节点侧 ID
+- 响应方向：按 `target_channel + target_rsp_id` 反查，改写回 tester 侧 ID
+
+**约束**：`target_rsp_id` 在表内必须唯一。响应帧里只有 CAN ID 能定位来源，
+两个节点回同一个 ID 就无法分辨——这是协议决定的，配置时直接拒绝。
 
 ## 构建
 
@@ -63,7 +82,7 @@ sudo ip link set up vcan1
 
 - [can-node](https://github.com/Dik-910/can-node) —— CAN 节点固件（UDS / ISO-TP / Bootloader），
   作为本网关的下游设备
-- [AII_gateway](https://github.com/Dik-910/AII_gateway) —— 前身，Linux IoT 网关
+- [smartgateway](https://github.com/Dik-910/smartgateway) —— 前身，Linux IoT 网关
 
 ## 许可证
 

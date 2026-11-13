@@ -18,6 +18,7 @@ int route_engine_init(route_engine_t *e)
 
     memset(e, 0, sizeof(*e));
     route_table_init(&e->routes);
+    diag_router_init(&e->diag);
 
     fd = epoll_create1(0);
     if (fd < 0)
@@ -98,6 +99,25 @@ int route_engine_add_route(route_engine_t *e, const route_rule_t *rule)
     return route_table_add(&e->routes, rule);
 }
 
+int route_engine_add_diag_map(route_engine_t *e, const diag_map_t *m)
+{
+    if (e == 0 || m == 0)
+        return -1;
+
+    if (m->tester_channel >= e->channel_count || m->target_channel >= e->channel_count)
+    {
+        log_error("diag map references unregistered channel (%u, %u)",
+                  m->tester_channel, m->target_channel);
+        return -1;
+    }
+
+    if (diag_router_add(&e->diag, m) != 0)
+        return -1;
+
+    e->diag_enabled = 1;
+    return 0;
+}
+
 void route_engine_stop(route_engine_t *e)
 {
     if (e != 0)
@@ -113,9 +133,46 @@ static void drain_channel(route_engine_t *e, uint8_t idx)
     {
         const route_rule_t *rule;
         uint32_t target_id;
+        uint8_t dst_ch;
+        uint64_t now_ms;
 
         if (can_channel_recv(&e->channels[idx], &f, idx) != 0)
             break; /* 读空了，或出错 */
+
+        now_ms = f.timestamp_us / 1000ull;
+
+        /*
+         * 诊断映射优先于静态路由表。
+         * 顺序不能反：一旦先落到静态规则，tester 侧的 ID 改写就没机会生效，
+         * 多个 tester 并发时响应会全部涌向同一个 ID。
+         */
+        if (e->diag_enabled)
+        {
+            int hit = diag_router_request(&e->diag, now_ms, idx, f.id, &dst_ch, &target_id);
+
+            if (hit != 0)
+                hit = diag_router_response(&e->diag, now_ms, idx, f.id, &dst_ch, &target_id);
+
+            if (hit == 0)
+            {
+                if (dst_ch >= e->channel_count)
+                {
+                    e->rewrite_failed++;
+                    continue;
+                }
+
+                f.id = target_id;
+
+                if (can_channel_send(&e->channels[dst_ch], &f) != 0)
+                    e->send_failed++;
+                else
+                {
+                    e->forwarded++;
+                    e->diag_forwarded++;
+                }
+                continue;
+            }
+        }
 
         rule = route_table_match(&e->routes, idx, f.id);
         if (rule == 0)
@@ -188,8 +245,9 @@ void route_engine_print_stats(const route_engine_t *e)
     if (e == 0)
         return;
 
-    log_info("stats: forwarded=%llu no_route=%llu send_failed=%llu rewrite_failed=%llu",
+    log_info("stats: forwarded=%llu (diag %llu) no_route=%llu send_failed=%llu rewrite_failed=%llu",
              (unsigned long long)e->forwarded,
+             (unsigned long long)e->diag_forwarded,
              (unsigned long long)e->no_route,
              (unsigned long long)e->send_failed,
              (unsigned long long)e->rewrite_failed);

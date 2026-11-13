@@ -3,3 +3,4 @@
 /gateway
 /test/frame_queue_test
 /test/route_table_test
+/test/diag_router_test
