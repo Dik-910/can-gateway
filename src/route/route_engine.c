@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/epoll.h>
 
 #include "log/log.h"
@@ -200,15 +201,27 @@ static void drain_channel(route_engine_t *e, uint8_t idx)
     }
 }
 
-int route_engine_run(route_engine_t *e)
+/* 单调时钟毫秒，用于统计间隔计时 */
+static uint64_t engine_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
 {
     struct epoll_event events[GW_EPOLL_MAX_EVENTS];
+    uint64_t last_stats = 0;
 
     if (e == 0 || e->epoll_fd < 0)
         return -1;
 
     log_info("engine running: %u channel(s), %u rule(s)",
              e->channel_count, e->routes.count);
+
+    if (stats_interval_ms > 0)
+        last_stats = engine_now_ms();
 
     while (e->running)
     {
@@ -220,6 +233,17 @@ int route_engine_run(route_engine_t *e)
                 continue; /* 被信号打断是正常的 */
             log_error("epoll_wait failed: %s", strerror(errno));
             return -1;
+        }
+
+        /* 周期统计：放在循环末尾，避免影响本轮的转发处理 */
+        if (stats_interval_ms > 0)
+        {
+            uint64_t now = engine_now_ms();
+            if (now - last_stats >= stats_interval_ms)
+            {
+                route_engine_print_stats(e);
+                last_stats = now;
+            }
         }
 
         for (int i = 0; i < n; i++)

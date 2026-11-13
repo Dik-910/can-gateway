@@ -59,8 +59,11 @@ int route_engine_add_route(route_engine_t *e, const route_rule_t *rule);
  */
 int route_engine_add_diag_map(route_engine_t *e, const diag_map_t *m);
 
-/* 阻塞运行，直到 route_engine_stop 被调用 */
-int route_engine_run(route_engine_t *e);
+/*
+ * 阻塞运行，直到 route_engine_stop 被调用。
+ * stats_interval_ms 非 0 时，按该间隔打印一次统计（用于观察运行状态）。
+ */
+int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms);
 
 void route_engine_stop(route_engine_t *e);
 
