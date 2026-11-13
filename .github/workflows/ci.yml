@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      - name: Run unit tests
+        run: make test
+
+      # 单元测试全过但编译器有警告，说明有隐患被忽略了，所以再严格编一遍
+      - name: Build with warnings as errors
+        run: |
+          make clean
+          make CFLAGS="-std=c99 -Wall -Wextra -Werror -I. -Isrc/util -Isrc/channel -Isrc/route -Isrc/diag -Ithirdparty"
+
+      # 真实启动验证：建 vcan、读配置、跑起来、正常退出
+      - name: Start gateway with example config
+        run: |
+          sudo modprobe vcan
+          sudo ip link add dev vcan0 type vcan
+          sudo ip link add dev vcan1 type vcan
+          sudo ip link set up vcan0
+          sudo ip link set up vcan1
+
+          ./gateway --config examples/gateway.conf --stats 1 > /tmp/gw.log 2>&1 &
+          GW=$!
+          sleep 3
+          kill -INT $GW
+          wait $GW || true
+
+          echo "--- gateway log ---"
+          cat /tmp/gw.log
+
+          # 必须出现引擎运行标记，否则是进程活着但没真正起来
+          grep -q "engine running" /tmp/gw.log
+          # 配置必须被完整读取
+          grep -q "2 channel(s), 3 route(s), 1 diag map(s)" /tmp/gw.log
+          # 优雅退出时应当打印统计
+          grep -q "stats:" /tmp/gw.log
