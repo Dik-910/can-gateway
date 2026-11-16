@@ -514,7 +514,9 @@ void config_dump(const gw_config_t *cfg)
     if (cfg == 0)
         return;
 
-    if (cfg->mqtt.enabled)
+    if (!cfg->mqtt.enabled)
+        log_info("  mqtt  disabled (set enabled = 1 in [mqtt] to turn on)");
+    else
     {
         log_info("  mqtt  %s topic=%s window=%u ms channels=%s",
                  cfg->mqtt.addr, cfg->mqtt.topic, cfg->mqtt.window_ms,
