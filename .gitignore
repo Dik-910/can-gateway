@@ -10,3 +10,4 @@
 /.limit_test.conf
 /.gateway.log
 /tools/__pycache__/
+/.system/

@@ -64,5 +64,13 @@ uplink-check: gateway
 	 echo "--- gateway log ---"; tail -10 .gateway.log; \
 	 exit $$RC
 
+# 跨仓库系统联调：can-node -> 本网关 -> MQTT
+# 前置：vcan0/vcan1 已建、broker 在跑、../can-node 已 make node
+.PHONY: system-check
+system-check: gateway
+	@if [ -z "$(HAVE_MQTT)" ]; then \
+	  echo "SKIP: Paho C not found (install libpaho-mqtt-dev)"; exit 0; fi
+	python3 tools/system_check.py $(SYS_ARGS)
+
 clean:
 	$(RM) test/frame_queue_test test/route_table_test test/diag_router_test test/config_test test/rate_limiter_test test/aggregator_test gateway

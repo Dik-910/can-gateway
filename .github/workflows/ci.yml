@@ -79,3 +79,24 @@ jobs:
           grep -qE "Result: [0-9]+ passed, 0 failed" /tmp/uplink.log
           grep -q "periodic id aggregated, not per-frame" /tmp/uplink.log
           echo "aggregation verified"
+
+      # 跨仓库：把 can-node 拉下来，验证两个仓库合起来是不是一条系统。
+      #
+      # 这一步刻意依赖 can-node 的 main：它不是本仓库的单元测试，
+      # 而是「两个仓库协同工作」的集成验证。can-node 改坏了，这里就该红 ——
+      # 那正是我们想知道的，而不是要避免的噪音。
+      - name: Cross-repo system check with can-node
+        run: |
+          git clone --depth 1 https://github.com/Dik-910/can-node.git can-node
+          make -C can-node node
+          python3 -m pip install --quiet cantools
+
+          make system-check SYS_ARGS="--node-bin can-node/node --dbc can-node/docs/can_matrix.dbc" | tee /tmp/sys.log
+
+          # 必须真的跑起来，而不是被 SKIP 掉
+          grep -qE "Result: [0-9]+ passed, 0 failed" /tmp/sys.log
+          # 核心断言：诊断突发期间采集没有断
+          grep -q "no long gap in 0x181 uplink" /tmp/sys.log
+          # 协议一致性：上报的帧能被 can-node 的 DBC 解开
+          grep -q "every 0x180 payload decodes" /tmp/sys.log
+          echo "cross-repo integration verified"

@@ -211,11 +211,23 @@ make uplink-check
 python3 can-node/tools/udsoncan_interop.py
 ```
 
-## 构建
+## 构建与验证
 
 ```bash
-make test       # PC 侧单元测试，不依赖 CAN 接口
+make test           # 单元测试，不依赖 CAN 接口
+make uplink-check   # MQTT 上行端到端（需要 vcan + broker）
+make system-check   # 跨仓库：can-node -> 本网关 -> MQTT（需要 ../can-node 已编译）
 ```
+
+`make system-check` 验证的不只是「都能跑」，而是三个仓库合起来成立：
+
+| 断言 | 证明什么 |
+|---|---|
+| 上报帧能被 can-node 的 DBC 解开且字段合理 | 两端遵守同一份协议定义 |
+| UDS 读 VIN 经网关转发成功 | 转发不改写、不丢帧、不打乱 ISO-TP 帧序 |
+| **诊断期间周期数据上报的最长间隔 < 3 个窗口** | 诊断突发没有把采集卡死 |
+
+系统拓扑、仓库边界与耦合点见 [docs/system.md](docs/system.md)。
 
 ## 运行环境
 
@@ -233,6 +245,10 @@ sudo ip link set up vcan1
 
 - [can-node](https://github.com/Dik-910/can-node) —— CAN 节点固件（UDS / ISO-TP / Bootloader），
   作为本网关的下游设备
+- [bms-node](https://github.com/Dik-910/bms-node) —— 储能 BMS 节点，协议栈复制自 can-node
+- [mcu-gateway](https://github.com/Dik-910/mcu-gateway) —— FreeRTOS 版多协议网关。
+  **不在 CAN 线上**，是同一个问题在另一种约束（吞吐优先、资源受限）下的不同取舍，
+  对比见 [docs/system.md](docs/system.md) 第 4 节
 - [smartgateway](https://github.com/Dik-910/smartgateway) —— 前身，Linux IoT 网关
 
 ## 许可证
