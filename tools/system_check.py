@@ -115,6 +115,15 @@ class Collector:
             d = json.loads(msg.payload.decode())
         except Exception:
             return
+
+        # 本地到达时间，用来判断「上行的间隔」。
+        #
+        # 不能用消息里的 ts：那是网关记录的「最后一条帧的采集时间」。
+        # 数据不变时它不更新，两条 force 导出的消息会带着同一个 ts，
+        # 算出来的间隔恒为 0 —— 断言永远通过，等于没测。
+        # 我们要测的是「云端多久看到一次」，那就必须用云端的时钟。
+        d["_rx"] = time.time()
+
         with self.lock:
             self.msgs.append(d)
 
@@ -335,8 +344,12 @@ def main():
                 pass
 
         if loads:
+            # 注意：这里只验证字段落在合法区间，不验证数值正确。
+            # 节点侧目前没有实现负载率测量，该字段恒为 0。
+            # 真正的负载率由网关自己按位时间算（见 stats 里的 load=）。
             check(all(0 <= x <= 1000 for x in loads),
-                  "BusLoadPermille plausible", f"{sorted(set(loads))[:5]}")
+                  "BusLoadPermille in valid range",
+                  f"{sorted(set(loads))[:5]} (node does not measure it yet)")
 
         # ---------------- 断言 3：诊断经网关 ----------------
         print("\nDiagnostic through the gateway")
@@ -348,17 +361,23 @@ def main():
 
         # ---------------- 断言 4：诊断期间采集不中断 ----------------
         print("\nCollection survives diagnostic burst")
-        ts_181 = sorted(m.get("ts", 0) for m in by_id.get(0x181, []))
+        # 用 0x180 测连续性，不用 0x181。
+        #
+        # 0x180 的 UptimeS 每 100ms 变一次，所以每个窗口都必然上报，
+        # 间隔稳定在一个窗口 —— 任何卡顿都会立刻显现。
+        # 0x181 的数据恒定，本来就要靠 force 间隔才上报（本例 2 秒），
+        # 拿它算间隔会把「正常的 force 周期」误判成「被卡住了」。
+        rx_180 = sorted(m.get("_rx", 0.0) for m in by_id.get(0x180, []))
 
-        if len(ts_181) >= 2:
-            gaps = [b - a for a, b in zip(ts_181, ts_181[1:])]
-            worst = max(gaps)
+        if len(rx_180) >= 2:
+            gaps_ms = [(b - a) * 1000.0 for a, b in zip(rx_180, rx_180[1:])]
+            worst = max(gaps_ms)
 
-            # 一个窗口一条，允许偶尔错过一个窗口；超过 3 个窗口说明被卡住了
+            # 一个窗口一条；允许偶尔错过一个窗口，超过 3 个说明真的被卡住了
             limit = a.window * 3
             check(worst <= limit,
-                  "no long gap in 0x181 uplink",
-                  f"worst gap {worst} ms, limit {limit} ms")
+                  "no long gap in 0x180 uplink",
+                  f"worst gap {worst:.0f} ms, limit {limit} ms")
         else:
             check(False, "not enough 0x181 samples to judge continuity",
                   f"{len(ts_181)} samples")

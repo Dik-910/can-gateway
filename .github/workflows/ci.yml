@@ -97,7 +97,7 @@ jobs:
           # 必须真的跑起来，而不是被 SKIP 掉
           grep -qE "Result: [0-9]+ passed, 0 failed" /tmp/sys.log
           # 核心断言：诊断突发期间采集没有断
-          grep -q "no long gap in 0x181 uplink" /tmp/sys.log
+          grep -q "no long gap in 0x180 uplink" /tmp/sys.log
           # 协议一致性：上报的帧能被 can-node 的 DBC 解开
           grep -q "every 0x180 payload decodes" /tmp/sys.log
           echo "cross-repo integration verified"
