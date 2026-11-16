@@ -148,20 +148,22 @@ int route_engine_set_id_limit(route_engine_t *e, uint8_t channel, uint32_t id, u
 }
 
 int route_engine_enable_uplink(route_engine_t *e, uplink_t *u,
-                               uint32_t window_ms, uint8_t ch_mask)
+                               uint32_t window_ms, uint32_t force_ms,
+                               uint8_t ch_mask)
 {
     if (e == 0 || u == 0)
         return -1;
 
     e->uplink = u;
     e->uplink_window_ms = (window_ms != 0) ? window_ms : AGG_DEFAULT_WINDOW;
+    e->uplink_force_ms = (force_ms != 0) ? force_ms : AGG_DEFAULT_FORCE;
     e->uplink_ch_mask = ch_mask;
     /* 0 表示「窗口还没开始」，run 循环第一次进来时才取时间 */
     e->uplink_last_ms = 0;
     e->uplink_enabled = 1;
 
-    log_info("uplink enabled: window %u ms, channel mask 0x%02X",
-             e->uplink_window_ms, ch_mask);
+    log_info("uplink enabled: window %u ms, force %u ms, channel mask 0x%02X",
+             e->uplink_window_ms, e->uplink_force_ms, ch_mask);
     return 0;
 }
 
@@ -358,7 +360,7 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
             }
             else if (now - e->uplink_last_ms >= e->uplink_window_ms)
             {
-                agg_export(&e->agg, now, AGG_DEFAULT_FORCE, on_agg_export, e);
+                agg_export(&e->agg, now, e->uplink_force_ms, on_agg_export, e);
                 e->uplink_last_ms = now;
             }
         }

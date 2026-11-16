@@ -218,6 +218,17 @@ static int parse_mqtt_line(gw_config_t *cfg, char *line, int lineno)
         snprintf(cfg->mqtt.client_id, sizeof(cfg->mqtt.client_id), "%s", val);
     else if (strcmp(key, "channels") == 0)
         snprintf(cfg->mqtt.channels, sizeof(cfg->mqtt.channels), "%s", val);
+    else if (strcmp(key, "force") == 0)
+    {
+        uint32_t sec = 0;
+
+        if (parse_u32(val, &sec) != 0 || sec == 0 || sec > 3600)
+        {
+            log_error("config line %d: force must be 1..3600 seconds", lineno);
+            return -1;
+        }
+        cfg->mqtt.force_ms = sec * 1000u;
+    }
     else if (strcmp(key, "window") == 0)
     {
         if (parse_u32(val, &cfg->mqtt.window_ms) != 0 || cfg->mqtt.window_ms < 100)
@@ -332,6 +343,7 @@ int config_load(gw_config_t *cfg, const char *path)
     snprintf(cfg->mqtt.topic, sizeof(cfg->mqtt.topic), "gw/can");
     snprintf(cfg->mqtt.client_id, sizeof(cfg->mqtt.client_id), "can-gateway");
     cfg->mqtt.window_ms = 1000;
+    cfg->mqtt.force_ms = 30000;
     cfg->mqtt.enabled = 0;
 
     fp = fopen(path, "r");
@@ -518,8 +530,9 @@ void config_dump(const gw_config_t *cfg)
         log_info("  mqtt  disabled (set enabled = 1 in [mqtt] to turn on)");
     else
     {
-        log_info("  mqtt  %s topic=%s window=%u ms channels=%s",
+        log_info("  mqtt  %s topic=%s window=%u ms force=%u ms channels=%s",
                  cfg->mqtt.addr, cfg->mqtt.topic, cfg->mqtt.window_ms,
+                 cfg->mqtt.force_ms,
                  cfg->mqtt.channels[0] ? cfg->mqtt.channels : "(all)");
     }
 

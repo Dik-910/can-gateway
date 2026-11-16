@@ -49,6 +49,7 @@ typedef struct
     int uplink_enabled;
     uint8_t uplink_ch_mask;      /* 哪些通道参与采集（位掩码），0 表示全部 */
     uint32_t uplink_window_ms;   /* 聚合窗口 */
+    uint32_t uplink_force_ms;    /* 数据不变时的强制上报间隔 */
     uint64_t uplink_last_ms;
     uint64_t uplink_exported;    /* 已投递到队列的条数 */
 
@@ -95,7 +96,8 @@ int route_engine_set_id_limit(route_engine_t *e, uint8_t channel, uint32_t id, u
  * ch_mask 为 0 表示所有通道都采集。
  */
 int route_engine_enable_uplink(route_engine_t *e, uplink_t *u,
-                               uint32_t window_ms, uint8_t ch_mask);
+                               uint32_t window_ms, uint32_t force_ms,
+                               uint8_t ch_mask);
 
 /*
  * 阻塞运行，直到 route_engine_stop 被调用。

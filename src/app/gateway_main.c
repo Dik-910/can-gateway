@@ -256,7 +256,8 @@ int main(int argc, char **argv)
                 goto out;
             }
 
-            if (route_engine_enable_uplink(&engine, up, cfg.mqtt.window_ms, ch_mask) != 0)
+            if (route_engine_enable_uplink(&engine, up, cfg.mqtt.window_ms,
+                                           cfg.mqtt.force_ms, ch_mask) != 0)
             {
                 log_error("enable uplink failed");
                 uplink_destroy(up);
@@ -264,8 +265,9 @@ int main(int argc, char **argv)
                 goto out;
             }
 
-            log_info("mqtt uplink: %s topic %s, window %u ms",
-                     cfg.mqtt.addr, cfg.mqtt.topic, cfg.mqtt.window_ms);
+            log_info("mqtt uplink: %s topic %s, window %u ms, force %u ms",
+                     cfg.mqtt.addr, cfg.mqtt.topic, cfg.mqtt.window_ms,
+                     cfg.mqtt.force_ms);
         }
     }
 

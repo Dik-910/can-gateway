@@ -248,16 +248,20 @@ def main():
     node = gw = None
 
     try:
+        # 先订阅再启动设备。这是真实部署顺序：云端先在线，设备后上线。
+        #
+        # 反过来（先起设备再订阅）会漏掉首批消息，而且漏掉的恰好可能是
+        # 「数据恒定的 ID 的第一次上报」—— 那个 ID 之后要等 force 间隔
+        # 才会再发一次，于是测试会误判成「这个 ID 没上报」。
+        collector.start()
+        time.sleep(0.8)
+
         # 节点跑 14 秒，留足诊断与采集时间
         node = spawn([a.node_bin, "--if", a.node_if, "--seconds", "14"],
                      ".system/node.log")
         time.sleep(0.4)
         gw = spawn([a.gateway, "--config", a.config, "--stats", "4"],
                    ".system/gateway.log")
-        time.sleep(1.2)
-
-        collector.start()
-        time.sleep(0.8)
 
         print("Phase A: periodic data only (2s)")
         time.sleep(2.0)

@@ -1,12 +1,10 @@
 # 编译产物
 *.o
 /gateway
-/test/frame_queue_test
-/test/route_table_test
-/test/diag_router_test
-/test/config_test
+# 所有单测产物。原来逐个列举，加 aggregator_test 时忘了，结果
+# 21KB 二进制被提交进仓库 —— 通配才是对的做法
+/test/*_test
 /.cfg_test.conf
-/test/rate_limiter_test
 /.limit_test.conf
 /.gateway.log
 /tools/__pycache__/

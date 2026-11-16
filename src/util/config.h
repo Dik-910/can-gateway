@@ -30,6 +30,7 @@
  *   addr = tcp://127.0.0.1:1883
  *   topic = gw/can
  *   window = 1000          # 聚合窗口（毫秒）
+ *   force = 30             # 数据不变时，最多隔多少秒也要上报一次（默认 30）
  *   channels = a,b         # 只采集这两路；留空表示全部
  *
  *   [limits]
@@ -101,6 +102,7 @@ typedef struct
     char     topic[64];
     char     client_id[32];
     uint32_t window_ms;              /* 聚合窗口 */
+    uint32_t force_ms;               /* 数据不变时，多久强制上报一次 */
     char     channels[64];           /* 逗号分隔的通道短名；空表示全部 */
 } cfg_mqtt_t;
 
