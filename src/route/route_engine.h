@@ -7,6 +7,8 @@
 #include "diag_router.h"
 #include "rate_limiter.h"
 #include "route_table.h"
+#include "aggregator.h"
+#include "uplink.h"
 
 /*
  * 转发引擎：epoll 监听多路 CAN，收到帧就查路由表转发出去。
@@ -36,6 +38,19 @@ typedef struct
 
     rate_limiter_t rate;
     int rate_enabled;
+
+    /*
+     * 上行采集。注意它和转发是解耦的：
+     * 采集发生在路由匹配之前，所以没有路由规则（no_route）的帧也会被采集。
+     * 这是有意的——网关的「旁路采集」价值不该被路由表限制。
+     */
+    aggregator_t agg;
+    uplink_t *uplink;
+    int uplink_enabled;
+    uint8_t uplink_ch_mask;      /* 哪些通道参与采集（位掩码），0 表示全部 */
+    uint32_t uplink_window_ms;   /* 聚合窗口 */
+    uint64_t uplink_last_ms;
+    uint64_t uplink_exported;    /* 已投递到队列的条数 */
 
     int epoll_fd;
     int running;
@@ -73,6 +88,14 @@ void route_engine_set_channel_limit(route_engine_t *e, uint8_t channel, uint32_t
 
 /* 为单个 ID 设置上限，用于精确保护关键周期报文 */
 int route_engine_set_id_limit(route_engine_t *e, uint8_t channel, uint32_t id, uint32_t limit);
+
+/*
+ * 启用上行采集。uplink 由调用方持有生命周期，引擎只往里投递。
+ * window_ms 为 0 时用默认 1000ms。
+ * ch_mask 为 0 表示所有通道都采集。
+ */
+int route_engine_enable_uplink(route_engine_t *e, uplink_t *u,
+                               uint32_t window_ms, uint8_t ch_mask);
 
 /*
  * 阻塞运行，直到 route_engine_stop 被调用。

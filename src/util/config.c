@@ -191,6 +191,54 @@ static int parse_diag_line(gw_config_t *cfg, char *line, int lineno)
  *   a = 3000            通道总速率
  *   id a,0x181,60       单 ID 速率
  */
+/*
+ * [mqtt] 段：key = value
+ *   addr / topic / client_id / window / channels
+ */
+static int parse_mqtt_line(gw_config_t *cfg, char *line, int lineno)
+{
+    char *eq = strchr(line, '=');
+    char *key, *val;
+
+    if (eq == 0)
+    {
+        log_error("config line %d: mqtt entry needs 'key = value'", lineno);
+        return -1;
+    }
+
+    *eq = '\0';
+    key = trim(line);
+    val = trim(eq + 1);
+
+    if (strcmp(key, "addr") == 0)
+        snprintf(cfg->mqtt.addr, sizeof(cfg->mqtt.addr), "%s", val);
+    else if (strcmp(key, "topic") == 0)
+        snprintf(cfg->mqtt.topic, sizeof(cfg->mqtt.topic), "%s", val);
+    else if (strcmp(key, "client_id") == 0)
+        snprintf(cfg->mqtt.client_id, sizeof(cfg->mqtt.client_id), "%s", val);
+    else if (strcmp(key, "channels") == 0)
+        snprintf(cfg->mqtt.channels, sizeof(cfg->mqtt.channels), "%s", val);
+    else if (strcmp(key, "window") == 0)
+    {
+        if (parse_u32(val, &cfg->mqtt.window_ms) != 0 || cfg->mqtt.window_ms < 100)
+        {
+            log_error("config line %d: window must be >= 100 ms", lineno);
+            return -1;
+        }
+    }
+    else if (strcmp(key, "enabled") == 0)
+    {
+        cfg->mqtt.enabled = (atoi(val) != 0);
+    }
+    else
+    {
+        log_error("config line %d: unknown mqtt key '%s'", lineno, key);
+        return -1;
+    }
+
+    return 0;
+}
+
 static int parse_limit_line(gw_config_t *cfg, char *line, int lineno)
 {
     char *p;
@@ -278,6 +326,13 @@ int config_load(gw_config_t *cfg, const char *path)
         return -1;
 
     memset(cfg, 0, sizeof(*cfg));
+
+    /* MQTT 默认值：出现 addr 即视为启用 */
+    snprintf(cfg->mqtt.addr, sizeof(cfg->mqtt.addr), "tcp://127.0.0.1:1883");
+    snprintf(cfg->mqtt.topic, sizeof(cfg->mqtt.topic), "gw/can");
+    snprintf(cfg->mqtt.client_id, sizeof(cfg->mqtt.client_id), "can-gateway");
+    cfg->mqtt.window_ms = 1000;
+    cfg->mqtt.enabled = 0;
 
     fp = fopen(path, "r");
     if (fp == 0)
@@ -377,6 +432,14 @@ int config_load(gw_config_t *cfg, const char *path)
                 return -1;
             }
         }
+        else if (strcmp(section, "mqtt") == 0)
+        {
+            if (parse_mqtt_line(cfg, s, lineno) != 0)
+            {
+                fclose(fp);
+                return -1;
+            }
+        }
         else if (strcmp(section, "limits") == 0)
         {
             if (parse_limit_line(cfg, s, lineno) != 0)
@@ -450,6 +513,13 @@ void config_dump(const gw_config_t *cfg)
 {
     if (cfg == 0)
         return;
+
+    if (cfg->mqtt.enabled)
+    {
+        log_info("  mqtt  %s topic=%s window=%u ms channels=%s",
+                 cfg->mqtt.addr, cfg->mqtt.topic, cfg->mqtt.window_ms,
+                 cfg->mqtt.channels[0] ? cfg->mqtt.channels : "(all)");
+    }
 
     log_info("config: %d channel(s), %d route(s), %d diag map(s), %d limit(s)",
              cfg->channel_count, cfg->route_count, cfg->diag_count,

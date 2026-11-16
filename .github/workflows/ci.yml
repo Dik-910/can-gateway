@@ -12,6 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential python3-pip \
+            libpaho-mqtt-dev mosquitto mosquitto-clients
+          python3 -m pip install --quiet paho-mqtt python-can
+
       - name: Build
         run: make
 
@@ -22,10 +29,9 @@ jobs:
       - name: Build with warnings as errors
         run: |
           make clean
-          make CFLAGS="-std=c99 -Wall -Wextra -Werror -I. -Isrc/util -Isrc/channel -Isrc/route -Isrc/diag -Ithirdparty"
+          make CFLAGS="-std=c99 -Wall -Wextra -Werror -I. -Isrc/util -Isrc/channel -Isrc/route -Isrc/diag -Isrc/uplink -Ithirdparty"
 
-      # 真实启动验证：建 vcan、读配置、跑起来、正常退出
-      - name: Start gateway with example config
+      - name: Setup vcan and broker
         run: |
           sudo modprobe vcan
           sudo ip link add dev vcan0 type vcan
@@ -33,6 +39,20 @@ jobs:
           sudo ip link set up vcan0
           sudo ip link set up vcan1
 
+          if ! python3 -c "import socket;socket.create_connection(('127.0.0.1',1883),1)" 2>/dev/null; then
+            mosquitto -p 1883 -d
+            sleep 2
+          fi
+          python3 -c "
+          import socket
+          s = socket.create_connection(('127.0.0.1', 1883), timeout=3)
+          s.close()
+          print('broker reachable')
+          "
+
+      # 真实启动验证：读配置、跑起来、正常退出
+      - name: Start gateway with example config
+        run: |
           ./gateway --config examples/gateway.conf --stats 1 > /tmp/gw.log 2>&1 &
           GW=$!
           sleep 3
@@ -48,3 +68,14 @@ jobs:
           grep -q "2 channel(s), 3 route(s), 1 diag map(s)" /tmp/gw.log
           # 优雅退出时应当打印统计
           grep -q "stats:" /tmp/gw.log
+          # MQTT 上行必须真的启用
+          grep -q "mqtt uplink:" /tmp/gw.log
+
+      # 端到端：往 vcan 灌帧，验证 MQTT 收到聚合后的消息
+      - name: MQTT uplink end-to-end
+        run: |
+          make uplink-check UP_ARGS="--if vcan0 --seconds 5" | tee /tmp/uplink.log
+          # 必须真的跑了。Paho 缺失时 make 会 SKIP 并返回 0 —— 那属于静默跳过
+          grep -qE "Result: [0-9]+ passed, 0 failed" /tmp/uplink.log
+          grep -q "periodic id aggregated, not per-frame" /tmp/uplink.log
+          echo "aggregation verified"

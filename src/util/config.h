@@ -25,6 +25,13 @@
  *   # tester_ch,tester_req,tester_rsp,target_ch,target_req,target_rsp
  *   a,0x7E0,0x7E8,b,0x7E0,0x7E8
  *
+ *   [mqtt]
+ *   # 不写这一段或 enabled = 0 时不上报
+ *   addr = tcp://127.0.0.1:1883
+ *   topic = gw/can
+ *   window = 1000          # 聚合窗口（毫秒）
+ *   channels = a,b         # 只采集这两路；留空表示全部
+ *
  *   [limits]
  *   # 通道总速率（帧/秒）
  *   a = 3000
@@ -86,6 +93,17 @@ typedef struct
     uint32_t limit;
 } cfg_id_limit_t;
 
+/* MQTT 上行配置 */
+typedef struct
+{
+    int      enabled;
+    char     addr[64];
+    char     topic[64];
+    char     client_id[32];
+    uint32_t window_ms;              /* 聚合窗口 */
+    char     channels[64];           /* 逗号分隔的通道短名；空表示全部 */
+} cfg_mqtt_t;
+
 typedef struct
 {
     cfg_channel_t channels[CFG_MAX_CHANNELS];
@@ -101,6 +119,8 @@ typedef struct
     int chan_limit_count;
     cfg_id_limit_t id_limits[CFG_MAX_LIMITS];
     int id_limit_count;
+
+    cfg_mqtt_t mqtt;
 } gw_config_t;
 
 /* 载入配置。成功返回 0，失败返回 -1（会打印具体行号） */

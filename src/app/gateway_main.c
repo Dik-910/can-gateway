@@ -42,6 +42,59 @@ static int resolve_channel(const gw_config_t *cfg, const int *ch_idx, const char
     return ch_idx[i];
 }
 
+/*
+ * 把 "a,b" 这样的通道短名列表转成位掩码。
+ * 空字符串返回 0（表示全部通道）。
+ * 遇到未知名字返回 -1 —— 配置写错必须启动即失败，
+ * 静默忽略会出现「明明配了采集却一条数据都没有」。
+ */
+static int resolve_channel_mask(const gw_config_t *cfg, const int *ch_idx,
+                                const char *list, uint8_t *out_mask)
+{
+    char buf[64];
+    char *p, *tok;
+    uint8_t mask = 0;
+
+    *out_mask = 0;
+
+    if (list == 0 || list[0] == '\0')
+        return 0;
+
+    snprintf(buf, sizeof(buf), "%s", list);
+
+    p = buf;
+    while ((tok = strtok(p, ",")) != 0)
+    {
+        int idx;
+
+        p = 0;
+
+        /* 去掉前后空格 */
+        while (*tok == ' ')
+            tok++;
+        {
+            size_t n = strlen(tok);
+            while (n > 0 && (tok[n - 1] == ' ' || tok[n - 1] == '\t'))
+                tok[--n] = '\0';
+        }
+
+        if (*tok == '\0')
+            continue;
+
+        idx = resolve_channel(cfg, ch_idx, tok);
+        if (idx < 0)
+        {
+            log_error("mqtt.channels references unknown channel '%s'", tok);
+            return -1;
+        }
+
+        mask = (uint8_t)(mask | (1u << idx));
+    }
+
+    *out_mask = mask;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *conf_path = "examples/gateway.conf";
@@ -168,6 +221,54 @@ int main(int argc, char **argv)
         }
     }
 
+    /* ---- MQTT 上行 ---- */
+    if (cfg.mqtt.enabled)
+    {
+        uint8_t ch_mask = 0;
+
+        if (resolve_channel_mask(&cfg, ch_idx, cfg.mqtt.channels, &ch_mask) != 0)
+        {
+            rc = 1;
+            goto out;
+        }
+
+        if (!uplink_available())
+        {
+            log_warn("mqtt configured but built without Paho, uplink disabled");
+        }
+        else
+        {
+            uplink_t *up = uplink_create(cfg.mqtt.addr, cfg.mqtt.topic,
+                                         cfg.mqtt.client_id);
+
+            if (up == 0)
+            {
+                log_error("uplink create failed");
+                rc = 1;
+                goto out;
+            }
+
+            if (uplink_start(up) != 0)
+            {
+                log_error("uplink start failed");
+                uplink_destroy(up);
+                rc = 1;
+                goto out;
+            }
+
+            if (route_engine_enable_uplink(&engine, up, cfg.mqtt.window_ms, ch_mask) != 0)
+            {
+                log_error("enable uplink failed");
+                uplink_destroy(up);
+                rc = 1;
+                goto out;
+            }
+
+            log_info("mqtt uplink: %s topic %s, window %u ms",
+                     cfg.mqtt.addr, cfg.mqtt.topic, cfg.mqtt.window_ms);
+        }
+    }
+
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
@@ -177,6 +278,16 @@ int main(int argc, char **argv)
 
     log_info("gateway stopping");
     route_engine_print_stats(&engine);
+
+    if (engine.uplink != 0)
+    {
+        uplink_t *up = engine.uplink;
+
+        /* 先把队列里剩的尽量发完，再释放 */
+        log_info("draining uplink queue...");
+        engine.uplink = 0;
+        uplink_destroy(up);
+    }
 
 out:
     route_engine_close(&engine);

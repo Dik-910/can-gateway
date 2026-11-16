@@ -21,6 +21,7 @@ int route_engine_init(route_engine_t *e)
     route_table_init(&e->routes);
     diag_router_init(&e->diag);
     rate_limiter_init(&e->rate);
+    agg_init(&e->agg);
 
     fd = epoll_create1(0);
     if (fd < 0)
@@ -146,10 +147,71 @@ int route_engine_set_id_limit(route_engine_t *e, uint8_t channel, uint32_t id, u
     return 0;
 }
 
+int route_engine_enable_uplink(route_engine_t *e, uplink_t *u,
+                               uint32_t window_ms, uint8_t ch_mask)
+{
+    if (e == 0 || u == 0)
+        return -1;
+
+    e->uplink = u;
+    e->uplink_window_ms = (window_ms != 0) ? window_ms : AGG_DEFAULT_WINDOW;
+    e->uplink_ch_mask = ch_mask;
+    /*
+     * 置 0 而不是取当前时间：第一个窗口会立刻导出所有「首次出现」的条目。
+     * 这是想要的——刚启动时云端应该马上看到有哪些 ID 在发，
+     * 而不是等满一个窗口。
+     */
+    e->uplink_last_ms = 0;
+    e->uplink_enabled = 1;
+
+    log_info("uplink enabled: window %u ms, channel mask 0x%02X",
+             e->uplink_window_ms, ch_mask);
+    return 0;
+}
+
 void route_engine_stop(route_engine_t *e)
 {
     if (e != 0)
         e->running = 0;
+}
+
+/* 处理某一路通道上当前可读的所有帧，最多 GW_RX_BATCH_MAX 帧 */
+/*
+ * 聚合导出回调：组一条 JSON 投进上行队列。
+ *
+ * 手写 JSON 而不用 cJSON：
+ * 格式固定（就这几个字段），一次 snprintf 就够，不必为此引入依赖、
+ * 也不必每帧 malloc/free —— 在转发主路径上，分配是最不该出现的东西。
+ *
+ * 注意返回非 0 时 aggregator 会保留 dirty，下个窗口重试。
+ * 队列满导致的丢弃是可控的；丢数据但保留「有新值」的标记才是对的。
+ */
+static int on_agg_export(const agg_entry_t *en, void *user)
+{
+    route_engine_t *e = (route_engine_t *)user;
+    char hex[2 * GW_FRAME_MAX_DLC + 1];
+    char buf[GW_UPLINK_MSG_MAX];
+    int n = 0;
+
+    for (uint8_t i = 0; i < en->dlc && i < GW_FRAME_MAX_DLC; i++)
+        n += snprintf(hex + n, sizeof(hex) - (size_t)n, "%02X", en->data[i]);
+    hex[n] = '\0';
+
+    snprintf(buf, sizeof(buf),
+             "{\"gw\":\"can-gateway\",\"ch\":\"%s\",\"id\":\"0x%03X\","
+             "\"n\":%u,\"dlc\":%u,\"d\":\"%s\",\"ts\":%llu}",
+             e->channels[en->channel].name,
+             en->id,
+             (unsigned)en->count,
+             (unsigned)en->dlc,
+             hex,
+             (unsigned long long)en->last_ms);
+
+    if (e->uplink == 0 || uplink_publish(e->uplink, buf) != 0)
+        return -1;
+
+    e->uplink_exported++;
+    return 0;
 }
 
 /* 处理某一路通道上当前可读的所有帧，最多 GW_RX_BATCH_MAX 帧 */
@@ -168,6 +230,18 @@ static void drain_channel(route_engine_t *e, uint8_t idx)
             break; /* 读空了，或出错 */
 
         now_ms = f.timestamp_us / 1000ull;
+
+        /*
+         * 采集放在路由之前：没有路由规则的帧（no_route）也要上报。
+         * 网关的旁路监测价值不该被路由表决定 —— 总线上有些帧本来就
+         * 只给远端 ECU 看的，不需要转发，但云端仍然想知道它还在发。
+         */
+        if (e->uplink_enabled &&
+            (e->uplink_ch_mask == 0 ||
+             (e->uplink_ch_mask & (uint8_t)(1u << idx)) != 0))
+        {
+            agg_update(&e->agg, idx, f.id, f.data, f.dlc);
+        }
 
         /*
          * 诊断映射优先于静态路由表。
@@ -269,6 +343,18 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
             return -1;
         }
 
+        /* 聚合导出：按窗口把本周期有变化的条目推给上行 */
+        if (e->uplink_enabled)
+        {
+            uint64_t now = engine_now_ms();
+
+            if (now - e->uplink_last_ms >= e->uplink_window_ms)
+            {
+                agg_export(&e->agg, now, AGG_DEFAULT_FORCE, on_agg_export, e);
+                e->uplink_last_ms = now;
+            }
+        }
+
         /* 周期统计：放在循环末尾，避免影响本轮的转发处理 */
         if (stats_interval_ms > 0)
         {
@@ -313,6 +399,15 @@ void route_engine_print_stats(route_engine_t *e)
 
     {
         uint64_t now = engine_now_ms();
+
+        if (e->uplink_enabled && e->uplink != 0)
+        {
+            log_info("  uplink: agg_entries=%d exported=%llu overflow=%llu",
+                     agg_count(&e->agg),
+                     (unsigned long long)e->uplink_exported,
+                     (unsigned long long)e->agg.overflow);
+            uplink_print_stats(e->uplink);
+        }
 
         for (uint8_t i = 0; i < e->channel_count; i++)
         {
