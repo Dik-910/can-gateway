@@ -17,7 +17,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential python3-pip \
             libpaho-mqtt-dev mosquitto mosquitto-clients
-          python3 -m pip install --quiet paho-mqtt python-can
+          # can-isotp / udsoncan 用于跨仓库系统联调（UDS 探针）
+          # cantools 用于按 can-node 的 DBC 校验上报内容
+          python3 -m pip install --quiet paho-mqtt python-can can-isotp udsoncan cantools
 
       - name: Build
         run: make
@@ -89,7 +91,6 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/Dik-910/can-node.git can-node
           make -C can-node node
-          python3 -m pip install --quiet cantools
 
           make system-check SYS_ARGS="--node-bin can-node/node --dbc can-node/docs/can_matrix.dbc" | tee /tmp/sys.log
 
