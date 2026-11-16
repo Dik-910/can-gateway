@@ -62,7 +62,7 @@ def make_client(cid):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--if", default="vcan0")
+    ap.add_argument("--if", dest="ifname", default="vcan0")
     ap.add_argument("--seconds", type=float, default=5.0)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=1883)
@@ -84,14 +84,14 @@ def main():
 
     # --- 往 CAN 上发帧 ---
     try:
-        bus = can.interface.Bus(channel=args.if, interface="socketcan")
+        bus = can.interface.Bus(channel=args.ifname, interface="socketcan")
     except Exception as e:
-        print(f"  [FAIL] cannot open {args.if}: {e}")
+        print(f"  [FAIL] cannot open {args.ifname}: {e}")
         print("  提示：sudo modprobe vcan && sudo ip link add dev vcan0 type vcan && sudo ip link set up vcan0")
         cli.loop_stop()
         return 2
 
-    print(f"  sending on {args.if} for {args.seconds}s")
+    print(f"  sending on {args.ifname} for {args.seconds}s")
     print("    0x180  每 100ms，数据固定   -> 期望只上报 1 次")
     print("    0x200  每 1s，数据变化      -> 期望每次变化都上报")
 
@@ -145,7 +145,7 @@ def main():
         check(m.get("n", 0) >= expect * 0.6,
               "frame count covers the window",
               f"n={m.get('n')} vs ~{expect} frames sent")
-        check(m.get("ch") == args.if or m.get("ch", "").startswith("vcan"),
+        check(m.get("ch") == args.ifname or m.get("ch", "").startswith("vcan"),
               "channel name carried", f"ch={m.get('ch')}")
         check(isinstance(m.get("d"), str) and len(m["d"]) == 16,
               "payload hex is 8 bytes", f"d={m.get('d')}")

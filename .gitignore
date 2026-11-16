@@ -9,3 +9,4 @@
 /test/rate_limiter_test
 /.limit_test.conf
 /.gateway.log
+/tools/__pycache__/
