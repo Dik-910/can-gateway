@@ -38,7 +38,12 @@ PASS, FAIL = [], []
 
 
 def check(cond, what, detail=""):
-    (cond and PASS or FAIL).append(what)
+    # 不要写 (cond and PASS or FAIL)：PASS 是空列表时是 falsy，
+    # 结果永远落到 FAIL，全部断言都被记成失败。
+    if cond:
+        PASS.append(what)
+    else:
+        FAIL.append(what)
     print(f"  [{'PASS' if cond else 'FAIL'}] {what}" + (f"  ({detail})" if detail else ""))
 
 
@@ -64,6 +69,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--if", dest="ifname", default="vcan0")
     ap.add_argument("--seconds", type=float, default=5.0)
+    ap.add_argument("--window", type=int, default=1000, help="gateway 的聚合窗口(ms)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=1883)
     args = ap.parse_args()
@@ -141,10 +147,12 @@ def main():
 
     if m180:
         m = m180[0]
-        expect = int(args.seconds * 10)
+        # n 是「单个聚合窗口内的帧数」，不是整轮测试的总帧数。
+        # 0x180 每 100ms 一帧 -> 1 秒窗口约 10 帧。
+        expect = max(1, int(args.window / 100))
         check(m.get("n", 0) >= expect * 0.6,
-              "frame count covers the window",
-              f"n={m.get('n')} vs ~{expect} frames sent")
+              "frame count covers one window",
+              f"n={m.get('n')} vs ~{expect} frames per window")
         check(m.get("ch") == args.ifname or m.get("ch", "").startswith("vcan"),
               "channel name carried", f"ch={m.get('ch')}")
         check(isinstance(m.get("d"), str) and len(m["d"]) == 16,

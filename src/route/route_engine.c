@@ -156,11 +156,7 @@ int route_engine_enable_uplink(route_engine_t *e, uplink_t *u,
     e->uplink = u;
     e->uplink_window_ms = (window_ms != 0) ? window_ms : AGG_DEFAULT_WINDOW;
     e->uplink_ch_mask = ch_mask;
-    /*
-     * 置 0 而不是取当前时间：第一个窗口会立刻导出所有「首次出现」的条目。
-     * 这是想要的——刚启动时云端应该马上看到有哪些 ID 在发，
-     * 而不是等满一个窗口。
-     */
+    /* 0 表示「窗口还没开始」，run 循环第一次进来时才取时间 */
     e->uplink_last_ms = 0;
     e->uplink_enabled = 1;
 
@@ -348,7 +344,19 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
         {
             uint64_t now = engine_now_ms();
 
-            if (now - e->uplink_last_ms >= e->uplink_window_ms)
+            if (e->uplink_last_ms == 0)
+            {
+                /*
+                 * 第一次进来只记窗口起点，不导出。
+                 *
+                 * 之前是「首次出现立刻导出」，结果是上报里的 n（帧数）
+                 * 只是刚启动那一瞬间的零头（实测 7，而一个窗口应有 10）。
+                 * 上游看到这个数字会以为丢帧了。等满一个窗口再导，
+                 * n 才是真实的窗口帧数——代价是新 ID 最多晚一个窗口出现。
+                 */
+                e->uplink_last_ms = now;
+            }
+            else if (now - e->uplink_last_ms >= e->uplink_window_ms)
             {
                 agg_export(&e->agg, now, AGG_DEFAULT_FORCE, on_agg_export, e);
                 e->uplink_last_ms = now;
