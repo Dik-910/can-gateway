@@ -1,8 +1,7 @@
 # 编译产物
 *.o
 /gateway
-# 所有单测产物。原来逐个列举，加 aggregator_test 时忘了，结果
-# 21KB 二进制被提交进仓库 —— 通配才是对的做法
+# 单测产物。用通配而不是逐个列举：新增套件时不会遗漏
 /test/*_test
 /.cfg_test.conf
 /.limit_test.conf
