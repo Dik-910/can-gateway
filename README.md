@@ -40,16 +40,16 @@ IoT 网关追求吞吐，线程池排队无所谓；车载网关要的是**确�
 | `src/util/frame_queue.c` | 已实现，测试覆盖回绕、溢出、单槽 |
 | `src/channel/can_channel.c` | 已实现，SocketCAN 多实例 |
 | `src/route/route_table.c` | 已实现，范围匹配 + ID 改写 + 首命即返回 |
-| `src/route/route_engine.c` | 已实现，epoll 主循环 |
-| `src/diag/diag_router.c` | 已实现，多 tester 会话映射 |
+| `src/route/route_engine.c` | 已实现，epoll 主循环、断链重连、诊断超时重传 |
+| `src/diag/diag_router.c` | 已实现，多 tester 会话映射与请求监督 |
 | `src/route/rate_limiter.c` | 已实现，洪水防护与限速 |
 | `src/util/config.c` | 已实现，INI 配置驱动 |
 
-单元测试 203 项：frame_queue 36 / route_table 36 / diag_router 27 / config 25 /
-rate_limiter 22 / aggregator 30 / channel_reconnect 27。
+单元测试 286 项：frame_queue 36 / route_table 36 / diag_router 27 / diag_timeout 83 /
+config 25 / rate_limiter 22 / aggregator 30 / channel_reconnect 27。
 
 断言总数以各套输出的 `Result: N passed` 行求和为准。aggregator 只打印汇总行，
-不逐条打印 `[PASS]`，因此按 `[PASS]` 行统计会得到 173（203 − 30）。
+不逐条打印 `[PASS]`，因此按 `[PASS]` 行统计会得到 256（286 − 30）。
 
 ## 诊断路由
 
@@ -67,6 +67,43 @@ tester2  0x7E1 ──┘                    └── 节点2  请求 0x7E2 / �
 
 **约束**：`target_rsp_id` 在表内必须唯一。响应帧里只有 CAN ID 能定位来源，
 两个节点回同一个 ID 就无法分辨——这是协议决定的，配置时直接拒绝。
+
+## 诊断会话监督
+
+映射表解决了「送给谁」，但没解决「送丢了」。总线上的单帧请求会因仲裁失败、
+错误帧或发送缓冲满而丢掉，节点收不到就不会有响应，tester 只能等到自己的
+P2 超时后整条请求重来。
+
+网关在转发之后登记一条待响应项，窗口内没有响应就重传一次：
+
+| 时刻 | 动作 |
+|---|---|
+| 请求转发成功 | 记录帧内容与节点侧 ID，截止时刻 = now + 150 ms |
+| 响应到达 | 结算，计 `answered` |
+| 响应为 `03 7F xx 78` | 节点仍在处理，截止时刻推到 now + 2000 ms，并停用重传 |
+| 150 ms 到期且未重传过 | 原样重发一次，计 `retry` |
+| 重传后仍无响应 | 计 `timeout` 并释放，由 tester 自己决定是否重发 |
+
+几个刻意的取舍：
+
+- **窗口取 150 ms，不是 UDS 的 P2 = 50 ms。** P2 是节点自身的响应时间指标，
+  不含报文往返与节点侧排队。窗口比 P2 宽一档才有意义；再宽就会晚于 tester
+  自己的超时，重传等于白发。
+- **只重传单帧请求。** 多帧请求的后续帧依赖接收方的流控状态和序号，
+  单独重发某一帧会破坏 ISO-TP 会话。这类请求仍纳入监督，但只统计超时不重传。
+- **不伪造响应。** 网关不代节点回否定响应，也不替 tester 判超时。网关和 tester
+  的超时是两层独立判断，重叠是有意的：网关负责救回「偶发丢失」，tester 负责
+  兜底「节点真的没有响应」。
+- **收到 `0x78` 之后不再重传。** 节点已经明确表示在处理，此时重发只会让它
+  收到重复请求。
+
+统计里 `diag:` 一行给出 `tracked` / `answered` / `timeout` / `retry` /
+`pending_ext` 五项。判定逻辑在 `test/diag_timeout_test`（83 项，不需要 vcan）；
+转发、重传与 0x78 延长的完整链路用 `make diag-check` 验证：
+
+```bash
+sudo ./tools/diag_timeout_check.py   # 需要 vcan0/vcan1 与 root
+```
 
 ## 速率限制
 
@@ -127,6 +164,7 @@ sudo ./tools/reconnect_check.py      # 需要 vcan0/vcan1 与 root
 
 ```
 stats: forwarded=360 (diag 0) no_route=0 rate_limited=0 send_failed=0 rewrite_failed=0
+  diag: tracked=120 answered=118 timeout=2 retry=2 pending_ext=1
   channel[0] vcan0  rx=360 tx=0   load=1.5% err=0 (bus 0 ctrl 0) reopen=0 fail=0
   channel[1] vcan1  rx=0   tx=360 load=1.5% err=0 (bus 0 ctrl 0) reopen=0 fail=0
 ```
@@ -253,6 +291,8 @@ python3 can-node/tools/udsoncan_interop.py
 make test           # 单元测试，不依赖 CAN 接口
 make uplink-check   # MQTT 上行端到端（需要 vcan + broker）
 make system-check   # 跨仓库：can-node -> 本网关 -> MQTT（需要 ../can-node 已编译）
+make reconnect-check # 接口掉线自愈（需要 root + vcan0/vcan1）
+make diag-check     # 诊断超时与重传（需要 root + vcan0/vcan1）
 ```
 
 `make system-check` 验证的不只是「都能跑」，而是三个仓库合起来成立：

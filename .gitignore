@@ -10,3 +10,5 @@
 /.system/
 # 掉线自愈脚本的临时文件
 /.reconnect_check.*
+# 诊断超时脚本的临时文件
+/.diag_timeout_check.*

@@ -263,6 +263,60 @@ static void service_reconnect(route_engine_t *e, uint64_t now_ms)
     }
 }
 
+/*
+ * 响应结算。节点回 0x7F <sid> 78 表示仍在处理，此时延长窗口而不是判超时；
+ * 其余响应视为请求已应答。
+ *
+ * 只认「单帧且声明长度恰好 3 字节」的形态，避免把业务数据里恰好出现的
+ * 0x7F / 0x78 误判成响应挂起。
+ */
+static void diag_note_response(route_engine_t *e, uint8_t node_ch, uint32_t rsp_id,
+                               const uint8_t *data, uint8_t dlc, uint64_t now_ms)
+{
+    if (dlc >= 4 && (data[0] & 0xF0u) == 0x00u && (data[0] & 0x0Fu) == 0x03u &&
+        data[1] == 0x7Fu && data[3] == 0x78u)
+    {
+        diag_router_extend(&e->diag, node_ch, rsp_id, now_ms);
+        return;
+    }
+
+    diag_router_answered(&e->diag, node_ch, rsp_id);
+}
+
+/* 诊断请求的超时扫描与重传。重传的帧与首次转发的内容完全一致 */
+static void service_diag_timeouts(route_engine_t *e, uint64_t now_ms)
+{
+    diag_retry_t retry[GW_DIAG_MAX_MAPS];
+    uint8_t n;
+
+    if (!e->diag_enabled)
+        return;
+
+    n = diag_router_service(&e->diag, now_ms, retry, GW_DIAG_MAX_MAPS);
+
+    for (uint8_t i = 0; i < n; i++)
+    {
+        gw_frame_t f;
+
+        if (retry[i].node_ch >= e->channel_count)
+            continue;
+
+        memset(&f, 0, sizeof(f));
+        f.id = retry[i].req_id;
+        f.dlc = retry[i].dlc;
+        f.src_channel = retry[i].node_ch;
+        memcpy(f.data, retry[i].data, retry[i].dlc);
+
+        if (can_channel_send(&e->channels[retry[i].node_ch], &f) != 0)
+            e->send_failed++;
+        else
+        {
+            e->forwarded++;
+            e->diag_forwarded++;
+        }
+    }
+}
+
 /* 处理某一路通道上当前可读的所有帧，最多 GW_RX_BATCH_MAX 帧 */
 static void drain_channel(route_engine_t *e, uint8_t idx)
 {
@@ -300,12 +354,17 @@ static void drain_channel(route_engine_t *e, uint8_t idx)
         if (e->diag_enabled)
         {
             int hit = diag_router_request(&e->diag, now_ms, idx, f.id, &dst_ch, &target_id);
+            int is_request = (hit == 0);
 
             if (hit != 0)
                 hit = diag_router_response(&e->diag, now_ms, idx, f.id, &dst_ch, &target_id);
 
             if (hit == 0)
             {
+                /* 响应方向：在 ID 被改写之前用节点侧的 ID 结算待响应项 */
+                if (!is_request)
+                    diag_note_response(e, idx, f.id, f.data, f.dlc, now_ms);
+
                 if (dst_ch >= e->channel_count)
                 {
                     e->rewrite_failed++;
@@ -320,6 +379,10 @@ static void drain_channel(route_engine_t *e, uint8_t idx)
                 {
                     e->forwarded++;
                     e->diag_forwarded++;
+
+                    /* 请求方向：转发成功后登记一条待响应项 */
+                    if (is_request)
+                        diag_router_track(&e->diag, dst_ch, f.id, f.data, f.dlc, now_ms);
                 }
                 continue;
             }
@@ -395,6 +458,9 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
         /* 链路维护：处理上一轮标记出来的断链通道 */
         service_reconnect(e, engine_now_ms());
 
+        /* 诊断会话监督：到期的请求重传，重传用尽仍无响应的计为超时 */
+        service_diag_timeouts(e, engine_now_ms());
+
         /* 聚合导出：按窗口把本周期有变化的条目推给上行 */
         if (e->uplink_enabled)
         {
@@ -469,6 +535,13 @@ void route_engine_print_stats(route_engine_t *e)
              (unsigned long long)e->rate_limited,
              (unsigned long long)e->send_failed,
              (unsigned long long)e->rewrite_failed);
+
+    if (e->diag_enabled)
+    {
+        log_info("  diag: tracked=%u answered=%u timeout=%u retry=%u pending_ext=%u",
+                 e->diag.tracked, e->diag.answered, e->diag.timeouts,
+                 e->diag.retries, e->diag.pending_ext);
+    }
 
     {
         uint64_t now = engine_now_ms();

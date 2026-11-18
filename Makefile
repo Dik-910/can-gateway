@@ -47,6 +47,9 @@ test/aggregator_test: test/aggregator_test.c src/uplink/aggregator.c
 test/diag_router_test: test/diag_router_test.c src/diag/diag_router.c thirdparty/log/log.c
 	$(CC) $(CFLAGS) $^ -o $@
 
+test/diag_timeout_test: test/diag_timeout_test.c src/diag/diag_router.c thirdparty/log/log.c
+	$(CC) $(CFLAGS) $^ -o $@
+
 test/config_test: test/config_test.c src/util/config.c thirdparty/log/log.c
 	$(CC) $(CFLAGS) $^ -o $@
 
@@ -57,6 +60,11 @@ test/rate_limiter_test: test/rate_limiter_test.c src/route/rate_limiter.c thirdp
 .PHONY: reconnect-check
 reconnect-check: gateway
 	@$(PYTHON) tools/reconnect_check.py
+
+# 诊断超时与重传：需要 root 与 vcan0/vcan1
+.PHONY: diag-check
+diag-check: gateway
+	@$(PYTHON) tools/diag_timeout_check.py
 
 # 端到端联调：需要 vcan0/vcan1 与运行中的 broker。
 # 本地建 vcan：
@@ -69,7 +77,7 @@ uplink-check: gateway
 	@echo "--- starting gateway ---"
 	@./gateway --config examples/gateway.conf --stats 3 > .gateway.log 2>&1 & \
 	 GW=$$!; sleep 2; \
-	 python3 tools/mqtt_uplink_check.py $(UP_ARGS); RC=$$?; \
+	 $(PYTHON) tools/mqtt_uplink_check.py $(UP_ARGS); RC=$$?; \
 	 kill -INT $$GW 2>/dev/null; wait $$GW 2>/dev/null; \
 	 echo "--- gateway log ---"; tail -10 .gateway.log; \
 	 exit $$RC
@@ -80,7 +88,7 @@ uplink-check: gateway
 system-check: gateway
 	@if [ -z "$(HAVE_MQTT)" ]; then \
 	  echo "SKIP: Paho C not found (install libpaho-mqtt-dev)"; exit 0; fi
-	python3 tools/system_check.py $(SYS_ARGS)
+	$(PYTHON) tools/system_check.py $(SYS_ARGS)
 
 clean:
-	$(RM) test/frame_queue_test test/route_table_test test/diag_router_test test/config_test test/rate_limiter_test test/aggregator_test gateway
+	$(RM) $(TESTS) gateway
