@@ -152,6 +152,13 @@ id a,0x181,60     # 单 ID 速率（精确保护关键周期报文）
 
 新 fd 不继承旧注册。仅做 `close` + `open` 的实现日志正常，但收不到任何帧。
 
+**3. bind 成功不等于链路可用**
+
+接口被 `ip link set down` 之后，`bind` 仍然成功——设备对象还在。只看 open 的
+返回值，重开会宣布恢复、日志每轮回一条 `back in service`，而实际收发全是
+`ENETDOWN`。所以重开前先用 `SIOCGIFFLAGS` 查一次 `IFF_UP`，没起来就记为一次
+失败的重开、继续按退避重试。
+
 重开的判定与计数在 `test/channel_reconnect_test`（27 项，不需要 vcan）；
 真实的 down/up 用 `make reconnect-check` 验证，它检查两件事：
 日志出现 `back in service`，以及恢复后再发帧对端能收到。

@@ -169,6 +169,35 @@ int can_channel_needs_reopen(const can_channel_t *ch)
     return (ch != 0 && ch->need_reopen) ? 1 : 0;
 }
 
+/*
+ * 接口是否处于管理员启用状态。
+ *
+ * bind 一个 down 掉的接口是会成功的（设备对象还在），所以只看 open 的返回值
+ * 会误判：reopen 宣布恢复、日志每轮回一条 back in service，而实际收发全是
+ * ENETDOWN。重开前先问一次链路状态，才能真正判断「回来了」。
+ *
+ * 查询失败时返回 1（放行）：查不到状态不该阻止重开，让后续实际收发去判定。
+ */
+static int link_is_up(const char *ifname)
+{
+    int fd;
+    int up = 1;
+    struct ifreq ifr;
+
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return 1;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+
+    if (ioctl(fd, SIOCGIFFLAGS, &ifr) == 0)
+        up = (ifr.ifr_flags & IFF_UP) != 0;
+
+    close(fd);
+    return up;
+}
+
 int can_channel_reopen(can_channel_t *ch)
 {
     can_channel_t saved;
@@ -184,6 +213,22 @@ int can_channel_reopen(can_channel_t *ch)
      */
     saved = *ch;
     can_channel_close(ch);
+
+    /*
+     * 接口还被 down 着：把这次算作一次失败的重开，继续按退避重试。
+     * 不这样做的话，下面的 bind 会成功，调用方以为已经恢复、停止重试，
+     * 而实际上这一路要等到下一次收发报错才会重新被发现。
+     */
+    if (!link_is_up(saved.name))
+    {
+        ch->fd = -1;
+        ch->opened = 0;
+        ch->reopen_count = saved.reopen_count;
+        ch->reopen_fail = saved.reopen_fail + 1;
+        ch->need_reopen = 1;
+        ch->last_errno = ENETDOWN;
+        return -1;
+    }
 
     rc = can_channel_open_ex(ch, saved.name, saved.bitrate);
 

@@ -43,6 +43,15 @@ try:
 except ImportError:
     can = None
 
+"""
+收帧时的错误类型。
+
+接口被 down 掉之后 recv() 抛的是 can.CanOperationError，它的继承链是
+CanError → Exception，**不是 OSError**。只 catch OSError 会漏掉，
+脚本会在「验证接口 down 期间收不到帧」这一步直接崩掉。
+"""
+BUS_ERRORS = (can.CanError, OSError) if can is not None else (OSError,)
+
 GW = "./gateway"
 CONF = ".reconnect_check.conf"
 LOG = ".reconnect_check.log"
@@ -68,9 +77,11 @@ def iface_exists(name):
         return False
 
 
-def link(name, state):
+def link(name, state, quiet=False):
     r = subprocess.run(["ip", "link", "set", name, state], capture_output=True, text=True)
     if r.returncode != 0 and "not permitted" in (r.stderr + r.stdout):
+        if quiet:
+            return False
         # 容器里 uid 可能是 0 但拿不到 CAP_NET_ADMIN，这不是脚本的问题
         print("  SKIP: 没有 CAP_NET_ADMIN，无法 ip link set（容器内常见）")
         print("        请在宿主机上直接运行本脚本：sudo ./tools/reconnect_check.py")
@@ -91,8 +102,9 @@ def wait_frame(bus, timeout, can_id=None):
     while time.time() < deadline:
         try:
             m = bus.recv(timeout=0.2)
-        except OSError:
-            # 接口 down 期间读会报错，等它回来即可
+        except BUS_ERRORS:
+            # 接口 down 期间读会报 Network is down，这正是想看到的：
+            # 继续等满 timeout，让「没收到帧」由返回值表达，而不是异常
             time.sleep(0.1)
             continue
         if m is not None and (can_id is None or m.arbitration_id == can_id):
@@ -138,6 +150,14 @@ def main():
     if os.geteuid() != 0:
         print("  SKIP: 需要 root 才能 ip link set down/up（sudo 运行本脚本）")
         return 0
+
+    # 先探一下能不能改接口状态：拿不到 CAP_NET_ADMIN 就别白启动网关了
+    # （顺带把上一次崩溃留下的 down 状态恢复掉）
+    if not link(if_a, "up", quiet=True):
+        print("  SKIP: 没有 CAP_NET_ADMIN，无法 ip link set（容器内常见）")
+        print("        请在宿主机上直接运行本脚本：sudo ./tools/reconnect_check.py")
+        return 0
+    link(if_b, "up", quiet=True)
 
     write_conf(if_a, if_b)
     if os.path.exists(LOG):
@@ -188,6 +208,11 @@ def main():
         check(wait_frame(dst, 2.0, can_id=SEND_ID) is not None,
               "frames flow again after the interface is back")
     finally:
+        # 断言失败或异常时也要把接口恢复，否则下一次运行从 down 开始
+        try:
+            link(down_up, "up", quiet=True)
+        except Exception:
+            pass
         for bus in (src, dst):
             try:
                 bus.shutdown()
