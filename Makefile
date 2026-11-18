@@ -1,4 +1,6 @@
 CC      ?= gcc
+# PATH 上的 python3 可能是缺标准库的托管运行时，显式给默认值
+PYTHON  ?= /usr/bin/python3
 CFLAGS  += -std=c99 -Wall -Wextra -I. -Isrc/util -Isrc/channel -Isrc/route -Isrc/diag -Isrc/uplink -Ithirdparty
 LDLIBS  += -lpthread
 
@@ -15,13 +17,16 @@ endif
 all: gateway test
 
 # PC 侧单元测试，不依赖 CAN 接口
-test: test/frame_queue_test test/route_table_test test/diag_router_test test/config_test test/rate_limiter_test test/aggregator_test
-	./test/frame_queue_test
-	./test/route_table_test
-	./test/diag_router_test
-	./test/config_test
-	./test/rate_limiter_test
-	./test/aggregator_test
+# 用例列表由 test/*_test.c 自动推出：新加一个用例不必再改这里，
+# 逐个列举的写法必然会漏（以前漏过）
+TEST_SRCS := $(wildcard test/*_test.c)
+TESTS     := $(patsubst test/%.c,test/%,$(TEST_SRCS))
+
+test: $(TESTS)
+	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
+
+test/channel_reconnect_test: test/channel_reconnect_test.c src/channel/can_channel.c thirdparty/log/log.c
+	$(CC) $(CFLAGS) $^ -o $@
 
 test/frame_queue_test: test/frame_queue_test.c src/util/frame_queue.c
 	$(CC) $(CFLAGS) $^ -o $@
@@ -47,6 +52,11 @@ test/config_test: test/config_test.c src/util/config.c thirdparty/log/log.c
 
 test/rate_limiter_test: test/rate_limiter_test.c src/route/rate_limiter.c thirdparty/log/log.c
 	$(CC) $(CFLAGS) $^ -o $@
+
+# 掉线自愈：需要 root 与 vcan0/vcan1
+.PHONY: reconnect-check
+reconnect-check: gateway
+	@$(PYTHON) tools/reconnect_check.py
 
 # 端到端联调：需要 vcan0/vcan1 与运行中的 broker。
 # 本地建 vcan：

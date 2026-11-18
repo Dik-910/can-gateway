@@ -128,6 +128,98 @@ void can_channel_close(can_channel_t *ch)
     ch->opened = 0;
 }
 
+/*
+ * 哪些 errno 意味着 socket 已经废了。
+ *
+ *   ENETDOWN  接口被 down 掉（或网线拔了）—— socket 还活着但收不到东西
+ *   ENODEV    接口被删掉、驱动卸载 —— socket 对应不到设备了
+ *   EBADF     fd 已经失效（被别处关掉）
+ *   EPERM     权限被回收（例如容器里改了设备策略）
+ *
+ * 反例要特别留意 ENOBUFS：那是发送侧缓冲满，属于「太快了」，
+ * 不是「链路断了」。把它当致命错误会触发一次毫无必要的重开，
+ * 而重开期间这路通道是真的收不到帧。
+ */
+int can_channel_error_fatal(int err)
+{
+    switch (err)
+    {
+    case ENETDOWN:
+    case ENODEV:
+    case EBADF:
+    case EPERM:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void can_channel_note_error(can_channel_t *ch, int err)
+{
+    if (ch == 0)
+        return;
+
+    ch->last_errno = err;
+    if (can_channel_error_fatal(err))
+        ch->need_reopen = 1;
+}
+
+int can_channel_needs_reopen(const can_channel_t *ch)
+{
+    return (ch != 0 && ch->need_reopen) ? 1 : 0;
+}
+
+int can_channel_reopen(can_channel_t *ch)
+{
+    can_channel_t saved;
+    int rc;
+
+    if (ch == 0)
+        return -1;
+
+    /*
+     * 只在内存里保留需要延续的字段。can_channel_open_ex 会清零整个结构，
+     * 直接调用会把累计统计一起抹掉 —— 而重开恰恰发生在故障之后，
+     * 那正是最不该丢统计的时刻。
+     */
+    saved = *ch;
+    can_channel_close(ch);
+
+    rc = can_channel_open_ex(ch, saved.name, saved.bitrate);
+
+    /* 名字与统计恢复（open 成功时它只设了 name/fd/opened/bitrate） */
+    strncpy(ch->name, saved.name, sizeof(ch->name) - 1);
+    ch->rx_frames = saved.rx_frames;
+    ch->tx_frames = saved.tx_frames;
+    ch->rx_errors = saved.rx_errors;
+    ch->tx_errors = saved.tx_errors;
+    ch->err_frames = saved.err_frames;
+    ch->err_bus = saved.err_bus;
+    ch->err_ctrl = saved.err_ctrl;
+    ch->bits_accum = saved.bits_accum;
+    ch->load_window_ms = saved.load_window_ms;
+    ch->load_permille = saved.load_permille;
+
+    if (rc == 0)
+    {
+        ch->reopen_count = saved.reopen_count + 1;
+        ch->reopen_fail = saved.reopen_fail;
+        ch->need_reopen = 0;
+        ch->last_errno = 0;
+        log_info("channel %s reopened (total %u)", ch->name, ch->reopen_count);
+        return 0;
+    }
+
+    /* 失败：保持 need_reopen，让调用方按退避继续重试 */
+    ch->fd = -1;
+    ch->opened = 0;
+    ch->reopen_count = saved.reopen_count;
+    ch->reopen_fail = saved.reopen_fail + 1;
+    ch->need_reopen = 1;
+    ch->last_errno = saved.last_errno;
+    return -1;
+}
+
 int can_channel_send(can_channel_t *ch, const gw_frame_t *f)
 {
     struct can_frame cf;
@@ -147,8 +239,12 @@ int can_channel_send(can_channel_t *ch, const gw_frame_t *f)
         /*
          * 发送失败不重试。CAN 是广播型总线，socket 缓冲满说明下游处理不过来，
          * 这时候重试只会把延迟越堆越高，丢掉并计数才是正确做法。
+         *
+         * 但要把 errno 分类：ENOBUFS 是「太快了」，ENETDOWN/ENODEV 是
+         * 「链路没了」，后者必须让引擎去重开。
          */
         ch->tx_errors++;
+        can_channel_note_error(ch, errno);
         return -1;
     }
 
@@ -171,6 +267,7 @@ int can_channel_recv(can_channel_t *ch, gw_frame_t *f, uint8_t channel_index)
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return -1; /* 暂无数据，不是错误 */
         ch->rx_errors++;
+        can_channel_note_error(ch, errno);
         return -2;
     }
     if (n != (ssize_t)sizeof(cf))

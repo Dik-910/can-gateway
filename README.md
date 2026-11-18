@@ -45,7 +45,11 @@ IoT 网关追求吞吐，线程池排队无所谓；车载网关要的是**确�
 | `src/route/rate_limiter.c` | 已实现，洪水防护与限速 |
 | `src/util/config.c` | 已实现，INI 配置驱动 |
 
-单元测试 146 项：frame_queue 36 / route_table 36 / diag_router 27 / config 25 / rate_limiter 22。
+单元测试 203 项：frame_queue 36 / route_table 36 / diag_router 27 / config 25 /
+rate_limiter 22 / aggregator 30 / channel_reconnect 27。
+
+断言总数以各套输出的 `Result: N passed` 行求和为准。aggregator 只打印汇总行，
+不逐条打印 `[PASS]`，因此按 `[PASS]` 行统计会得到 173（203 − 30）。
 
 ## 诊断路由
 
@@ -85,14 +89,46 @@ id a,0x181,60     # 单 ID 速率（精确保护关键周期报文）
 实测（0x181 限到 10 帧/秒，实际发送 50 帧/秒）：3 秒 `forwarded=60`、`rate_limited=120`，
 目标总线上 2 秒收到 `0x181` 正好 20 帧。
 
+## 掉线自愈
+
+接口被 down、被删或驱动卸载之后，socket 不再产生新帧。此时进程存活、统计不变，
+外部只能观察到转发计数停止增长，无法区分「总线安静」与「网关卡死」。
+
+处理分三层：
+
+| 层 | 职责 |
+|---|---|
+| 通道 | 对读/写失败的 `errno` 分类，判定哪些表示 socket 已废（`ENETDOWN` `ENODEV` `EBADF` `EPERM`） |
+| 引擎 | 标记 `need_reopen`，按 1 秒间隔退避重开，成功后重新 `EPOLL_CTL_ADD` |
+| 统计 | 每路输出 `reopen=` `fail=`，处于待重开状态时追加 `DOWN` 标记 |
+
+两条实现约束：
+
+**1. `ENOBUFS` 不归入断链**
+
+发送缓冲满表示瞬时过载，链路本身可用。将 `ENOBUFS` 判为致命错误会引入一次
+不必要的重开，而重开期间该通道确实收不到帧。
+
+**2. 重开之后必须重新注册 epoll**
+
+新 fd 不继承旧注册。仅做 `close` + `open` 的实现日志正常，但收不到任何帧。
+
+重开的判定与计数在 `test/channel_reconnect_test`（27 项，不需要 vcan）；
+真实的 down/up 用 `make reconnect-check` 验证，它检查两件事：
+日志出现 `back in service`，以及恢复后再发帧对端能收到。
+
+```bash
+sudo ./tools/reconnect_check.py      # 需要 vcan0/vcan1 与 root
+```
+
 ## 可观测性
 
 统计按 `--stats <秒>` 周期输出：
 
 ```
 stats: forwarded=360 (diag 0) no_route=0 rate_limited=0 send_failed=0 rewrite_failed=0
-  channel[0] vcan0  rx=360 tx=0   load=1.5% err=0 (bus 0 ctrl 0)
-  channel[1] vcan1  rx=0   tx=360 load=1.5% err=0 (bus 0 ctrl 0)
+  channel[0] vcan0  rx=360 tx=0   load=1.5% err=0 (bus 0 ctrl 0) reopen=0 fail=0
+  channel[1] vcan1  rx=0   tx=360 load=1.5% err=0 (bus 0 ctrl 0) reopen=0 fail=0
 ```
 
 - **负载率按位时间累加**计算（`47 + 8*dlc` 加约 1/6 位填充），不是按帧数估。

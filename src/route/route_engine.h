@@ -56,6 +56,14 @@ typedef struct
     int epoll_fd;
     int running;
 
+    /*
+     * 通道重连状态。接口 down 之后要等它自己被拉起来，
+     * 所以重开失败不能每轮都重试 —— 一秒钟一次已经足够，
+     * 而且失败时 syslog 不会被刷爆。
+     */
+    uint64_t reconnect_at[GW_CHANNEL_MAX];
+    uint64_t reconnects;      /* 累计成功重开次数 */
+
     /* 监控指标 */
     uint64_t forwarded;       /* 成功转发的帧数 */
     uint64_t diag_forwarded;  /* 其中经诊断映射转发的帧数 */

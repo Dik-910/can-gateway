@@ -212,6 +212,57 @@ static int on_agg_export(const agg_entry_t *en, void *user)
     return 0;
 }
 
+/*
+ * 链路维护：给需要重开的通道重新 bind socket，并挂回 epoll。
+ *
+ * 为什么不能「读到错误就 close 再 open」：
+ *   接口被 down 掉之后，open 会一直失败（SIOCGIFINDEX 找不到设备），
+ *   每帧重试一次等于把主循环拖进 syscall 风暴。所以失败要退避。
+ *
+ * 为什么要重新 EPOLL_CTL_ADD：
+ *   fd 是新的。旧 fd 在 epoll 里的注册随 close 一起消失，
+ *   内核不会替新 fd 保留注册 —— 忘了这步的表现是「重开成功、统计不动」。
+ */
+static void service_reconnect(route_engine_t *e, uint64_t now_ms)
+{
+    for (uint8_t i = 0; i < e->channel_count; i++)
+    {
+        can_channel_t *ch = &e->channels[i];
+        struct epoll_event ev;
+
+        if (!can_channel_needs_reopen(ch))
+            continue;
+        if (now_ms < e->reconnect_at[i])
+            continue;
+
+        /* 旧 fd 可能已经无效，DEL 失败不算问题 */
+        epoll_ctl(e->epoll_fd, EPOLL_CTL_DEL, ch->fd, 0);
+
+        if (can_channel_reopen(ch) != 0)
+        {
+            e->reconnect_at[i] = now_ms + GW_CHANNEL_RECONNECT_MS;
+            continue;
+        }
+
+        memset(&ev, 0, sizeof(ev));
+        ev.events = EPOLLIN;
+        ev.data.u32 = i;
+
+        if (epoll_ctl(e->epoll_fd, EPOLL_CTL_ADD, can_channel_fd(ch), &ev) < 0)
+        {
+            log_error("epoll_ctl add %s after reopen failed: %s",
+                      ch->name, strerror(errno));
+            ch->need_reopen = 1;
+            e->reconnect_at[i] = now_ms + GW_CHANNEL_RECONNECT_MS;
+            continue;
+        }
+
+        e->reconnect_at[i] = 0;
+        e->reconnects++;
+        log_info("channel %s back in service (reopen #%u)", ch->name, ch->reopen_count);
+    }
+}
+
 /* 处理某一路通道上当前可读的所有帧，最多 GW_RX_BATCH_MAX 帧 */
 static void drain_channel(route_engine_t *e, uint8_t idx)
 {
@@ -341,6 +392,9 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
             return -1;
         }
 
+        /* 链路维护：处理上一轮标记出来的断链通道 */
+        service_reconnect(e, engine_now_ms());
+
         /* 聚合导出：按窗口把本周期有变化的条目推给上行 */
         if (e->uplink_enabled)
         {
@@ -386,8 +440,17 @@ int route_engine_run(route_engine_t *e, uint32_t stats_interval_ms)
             if (events[i].events & EPOLLIN)
                 drain_channel(e, idx);
 
-            if (events[i].events & EPOLLERR)
-                log_warn("channel %s reported EPOLLERR", e->channels[idx].name);
+            /*
+             * EPOLLERR：接口出错（down、被删、驱动卸载）。
+             * 只打日志不够 —— 之后 read 会一直失败，这路通道等于静默死亡。
+             * 标成需要重开，交给 service_reconnect 处理。
+             */
+            if (events[i].events & (EPOLLERR | EPOLLHUP))
+            {
+                can_channel_note_error(&e->channels[idx], ENETDOWN);
+                log_warn("channel %s reported %s", e->channels[idx].name,
+                         (events[i].events & EPOLLERR) ? "EPOLLERR" : "EPOLLHUP");
+            }
         }
     }
 
@@ -424,10 +487,13 @@ void route_engine_print_stats(route_engine_t *e)
             can_channel_t *ch = &e->channels[i];
             uint32_t load = can_channel_update_load(ch, now);
 
-            log_info("  channel[%u] %-8s rx=%u tx=%u load=%u.%u%% err=%u (bus %u ctrl %u)",
+            log_info("  channel[%u] %-8s rx=%u tx=%u load=%u.%u%% err=%u (bus %u ctrl %u) "
+                     "reopen=%u fail=%u%s",
                      i, ch->name, ch->rx_frames, ch->tx_frames,
                      load / 10u, load % 10u,
-                     ch->err_frames, ch->err_bus, ch->err_ctrl);
+                     ch->err_frames, ch->err_bus, ch->err_ctrl,
+                     ch->reopen_count, ch->reopen_fail,
+                     ch->need_reopen ? " DOWN" : "");
         }
     }
 }
