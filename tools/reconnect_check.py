@@ -69,8 +69,13 @@ def iface_exists(name):
 
 
 def link(name, state):
-    return subprocess.run(["ip", "link", "set", name, state],
-                          capture_output=True, text=True).returncode == 0
+    r = subprocess.run(["ip", "link", "set", name, state], capture_output=True, text=True)
+    if r.returncode != 0 and "not permitted" in (r.stderr + r.stdout):
+        # 容器里 uid 可能是 0 但拿不到 CAP_NET_ADMIN，这不是脚本的问题
+        print("  SKIP: 没有 CAP_NET_ADMIN，无法 ip link set（容器内常见）")
+        print("        请在宿主机上直接运行本脚本：sudo ./tools/reconnect_check.py")
+        sys.exit(0)
+    return r.returncode == 0
 
 
 def write_conf(if_a, if_b):

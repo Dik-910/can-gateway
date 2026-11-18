@@ -107,6 +107,24 @@ def last_stat(text, key):
     return int(vals[-1]) if vals else None
 
 
+def wait_stat(key, at_least=1, timeout=3.0):
+    """
+    等统计行里的计数达到预期。
+
+    统计按 --stats 1 的周期打印，事件却可能在两次打印之间发生：
+    固定 sleep 一个「差不多」的时长会读到上一轮的数字，看起来像没生效。
+    这里改成轮询到条件成立，超时后返回最后一次读到的值。
+    """
+    end = time.time() + timeout
+    last = None
+    while time.time() < end:
+        last = last_stat(stats_text(), key)
+        if last is not None and last >= at_least:
+            return last
+        time.sleep(0.1)
+    return last
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--iface-a", default="vcan0", help="tester 侧接口")
@@ -160,7 +178,7 @@ def main():
         check(len(rsp) == 1, "response is routed back to the tester", f"got {len(rsp)}")
 
         time.sleep(1.2)
-        check(last_stat(stats_text(), "answered") == 1, "answered counted once",
+        check(wait_stat("answered", 1) >= 1, "answered counted once",
               str(last_stat(stats_text(), "answered")))
         check(last_stat(stats_text(), "retry") == 0, "no retransmission for an answered request")
 
@@ -177,15 +195,15 @@ def main():
                   f"{gap * 1000:.0f} ms")
 
         time.sleep(0.6)
-        text = stats_text()
-        check((last_stat(text, "timeout") or 0) >= 1, "the unanswered request is counted as timeout",
-              str(last_stat(text, "timeout")))
-        check((last_stat(text, "retry") or 0) >= 1, "the retransmission is counted",
-              str(last_stat(text, "retry")))
+        timeout_seen = wait_stat("timeout", 1, 3.0)
+        check(timeout_seen is not None and timeout_seen >= 1,
+              "the unanswered request is counted as timeout", str(timeout_seen))
+        check(wait_stat("retry", 1, 2.0) >= 1, "the retransmission is counted",
+              str(last_stat(stats_text(), "retry")))
 
         print("\nPhase C: 节点回 0x7F xx 78")
         drain(node)
-        retry_before = last_stat(stats_text(), "retry") or 0
+        retry_before = wait_stat("retry", 1, 2.0)
         tester.send(can.Message(arbitration_id=TESTER_REQ, data=[0x02, 0x31, 0x01],
                                 is_extended_id=False))
         first, _ = collect(node, 1.0, can_id=NODE_REQ)
@@ -203,8 +221,8 @@ def main():
               f"got {len(again)}")
         check((last_stat(stats_text(), "retry") or 0) == retry_before,
               "retry counter unchanged")
-        check((last_stat(stats_text(), "pending_ext") or 0) >= 1,
-              "extension is counted", str(last_stat(stats_text(), "pending_ext")))
+        ext = wait_stat("pending_ext", 1, 2.0)
+        check(ext is not None and ext >= 1, "extension is counted", str(ext))
 
         # 补上最终响应，确认延长之后仍能正常结算
         node.send(can.Message(arbitration_id=NODE_RSP,

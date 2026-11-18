@@ -105,6 +105,8 @@ P2 超时后整条请求重来。
 sudo ./tools/diag_timeout_check.py   # 需要 vcan0/vcan1 与 root
 ```
 
+这个脚本只收发帧、不改接口状态，不需要 CAP_NET_ADMIN。
+
 ## 速率限制
 
 网关只转发不限速，会把单个节点的故障扩散成整网故障——某个节点失陷后疯狂发报文，
@@ -157,6 +159,9 @@ id a,0x181,60     # 单 ID 速率（精确保护关键周期报文）
 ```bash
 sudo ./tools/reconnect_check.py      # 需要 vcan0/vcan1 与 root
 ```
+
+脚本要 `ip link set down/up`，所以需要 CAP_NET_ADMIN。容器里 uid 可能是 0 但该能力
+被收走，此时脚本输出 `SKIP` 并以 0 退出，不会误报成失败。
 
 ## 可观测性
 
