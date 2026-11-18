@@ -163,6 +163,17 @@ id a,0x181,60     # 单 ID 速率（精确保护关键周期报文）
 真实的 down/up 用 `make reconnect-check` 验证，它检查两件事：
 日志出现 `back in service`，以及恢复后再发帧对端能收到。
 
+实测（vcan 上把 vcan1 down 约 3.5 秒再拉起来，退避 1 秒）：
+
+```
+channel[1] vcan1  rx=0 tx=1  ... reopen=0 fail=3 DOWN     ← 接口还 down，重开连续失败
+channel[1] vcan1  rx=0 tx=1  ... reopen=0 fail=4 DOWN
+channel vcan1 back in service (reopen #1)                 ← 只有接口真的回来才有这一行
+channel[1] vcan1  rx=0 tx=6  ... reopen=1 fail=4          ← 恢复后 5 帧转发出去
+```
+
+`DOWN` 期间 `reopen` 始终是 0，说明没有出现「bind 成功就当恢复了」的假自愈。
+
 ```bash
 sudo ./tools/reconnect_check.py      # 需要 vcan0/vcan1 与 root
 ```
